@@ -1,25 +1,22 @@
 import argparse
+import json
+import re
+import sys
 from collections import defaultdict, Counter
 from itertools import islice, takewhile
 from math import radians, cos
-import json
-import re
 import fiona
+import matplotlib.pyplot as plt
 import nltk.data
-from nltk.tokenize import WordPunctTokenizer
-import seaborn
-from shapely.geometry import shape, Point
-import sys
 import numpy as np
 import pandas as pd
 import seaborn as sns
-import matplotlib.pyplot as plt
-from scipy.spatial import distance
-from scipy.cluster import hierarchy
-from scipy.stats import entropy
 from nltk.stem import SnowballStemmer
-from sklearn.cluster import AgglomerativeClustering
+from nltk.tokenize import WordPunctTokenizer
 from numpy.linalg import norm
+from scipy.stats import entropy
+from shapely.geometry import shape
+from sklearn.cluster import AgglomerativeClustering
 
 sns.set(font="monospace")
 sns.set_context('poster')
@@ -54,7 +51,8 @@ def get_shortest_in(needle, haystack):
     '''
     dlat = radians(haystack[0]) - radians(needle[0])
     dlon = radians(haystack[1]) - radians(needle[1])
-    a = np.square(np.sin(dlat/2.0)) + cos(radians(needle[0])) * np.cos(radians(haystack[0])) * np.square(np.sin(dlon/2.0))
+    a = np.square(np.sin(dlat / 2.0)) + cos(radians(needle[0])) * np.cos(radians(haystack[0])) * np.square(
+        np.sin(dlon / 2.0))
     great_circle_distance = 2 * np.arcsin(np.minimum(np.sqrt(a), np.repeat(1, 1)))
     d = EARTH_RADIUS * great_circle_distance
     return d.tolist()
@@ -63,8 +61,10 @@ def get_shortest_in(needle, haystack):
 parser = argparse.ArgumentParser(description="compare regions")
 parser.add_argument('--trustpilot', help='input file')
 parser.add_argument('--twitter', help='input file')
-parser.add_argument('--country', choices=['denmark', 'germany', 'france'], help='which country to use', default='denmark')
-parser.add_argument('--nuts', help='NUTS regions shape file', default="/Users/dirkhovy/working/lowlands/GeoStats/data/nuts/NUTS_RG_03M_2010.shp")
+parser.add_argument('--country', choices=['denmark', 'germany', 'france'], help='which country to use',
+                    default='denmark')
+parser.add_argument('--nuts', help='NUTS regions shape file',
+                    default="/Users/dirkhovy/working/lowlands/GeoStats/data/nuts/NUTS_RG_03M_2010.shp")
 parser.add_argument('--nuts_level', help='NUTS level', type=int, default=2)
 parser.add_argument('--N', help='minimum occurrence of words', type=int, default=10)
 parser.add_argument('--limit', help='max instances', type=int, default=None)
@@ -75,16 +75,15 @@ parser.add_argument('--show', help='show dendrogram', action='store_true', defau
 parser.add_argument('--stem', help='stem words', action='store_true', default=False)
 parser.add_argument('--geo', help='use geographic distance', action='store_true', default=False)
 parser.add_argument('--distance', choices=['kl', 'laskers', 'js'], help='similarity function on vocab', default='js')
-parser.add_argument('--target', choices=['region', 'gender'], help='traget variable', default='region')
+parser.add_argument('--target', choices=['region', 'gender'], help='target variable', default='region')
 
 args = parser.parse_args()
 
 distances = {'kl': kl, 'laskers': laskers, 'js': js}
-country2lang = {'denmark':'danish', 'germany':'german', 'france':'french'}
-country2nuts = {'denmark':'DK', 'germany':'DE', 'france':'FR'}
+country2lang = {'denmark': 'danish', 'germany': 'german', 'france': 'french'}
+country2nuts = {'denmark': 'DK', 'germany': 'DE', 'france': 'FR'}
 
-
-info = [args.country, 'min%s'% args.N, 'NUTS-%s' % args.nuts_level, args.distance]
+info = [args.country, 'min%s' % args.N, 'NUTS-%s' % args.nuts_level, args.distance]
 if args.idf:
     info.append('IDF')
 if args.stem:
@@ -92,15 +91,12 @@ if args.stem:
 if args.geo:
     info.append('geo-distance')
 
-
-
 regions = []
 region_centers = {}
 
 word_tokenizer = WordPunctTokenizer()
 sentence_tokenizer = nltk.data.load('tokenizers/punkt/%s.pickle' % (country2lang[args.country]))
 stemmer = SnowballStemmer(country2lang[args.country])
-
 
 if args.target == 'region':
     print("reading NUTS...", file=sys.stderr)
@@ -139,9 +135,9 @@ review_frequency = Counter()
 
 # compute matrix D, distances between regions
 if args.geo:
-    D = pd.DataFrame(0.0, index=regions, columns=regions)#np.zeros((len(regions), len(regions)), dtype=float)
+    D = pd.DataFrame(0.0, index=regions, columns=regions)  # np.zeros((len(regions), len(regions)), dtype=float)
     for i, r1 in enumerate(regions):
-        for j, r2 in enumerate(regions[i+1:]):
+        for j, r2 in enumerate(regions[i + 1:]):
             x = get_shortest_in(region_centers[r1], np.array(region_centers[r2]))[0]
             # x = np.log(get_shortest_in(region_centers[r1], np.array(region_centers[r2]))[0])
             D.ix[r1, r2] = x
@@ -150,13 +146,12 @@ if args.geo:
 # collect total vocab
 counts = defaultdict(lambda: defaultdict(lambda: 1))
 
-
 if args.trustpilot:
     for line_no, line in enumerate(islice(open(args.trustpilot), None)):
         if line_no > 0:
-            if line_no%1000 == 0:
+            if line_no % 1000 == 0:
                 print("%s" % (line_no), file=sys.stderr)
-            elif line_no%100 == 0:
+            elif line_no % 100 == 0:
                 print('.', file=sys.stderr, end=' ')
 
         if args.limit and line_no == args.limit:
@@ -180,7 +175,8 @@ if args.trustpilot:
                         text = re.sub(r'\n', ' ', text)
                         # TODO: better stopword filter
                         # words = (' '.join([' '.join(filter(lambda w: len(w) > 3, word_tokenizer.tokenize(x))) for x in sentence_tokenizer.tokenize(text)]).lower()).split()
-                        words = (' '.join([' '.join(word_tokenizer.tokenize(x)) for x in sentence_tokenizer.tokenize(text)]).lower()).split()
+                        words = (' '.join([' '.join(word_tokenizer.tokenize(x)) for x in
+                                           sentence_tokenizer.tokenize(text)]).lower()).split()
                         if args.stem:
                             words = map(stemmer.stem, words)
                             words = list(filter(lambda word: word != '', words))
@@ -197,9 +193,9 @@ if args.trustpilot:
 if args.twitter:
     for line_no, line in enumerate(islice(open(args.twitter), None)):
         if line_no > 0:
-            if line_no%1000 == 0:
+            if line_no % 1000 == 0:
                 print("%s" % (line_no), file=sys.stderr)
-            elif line_no%100 == 0:
+            elif line_no % 100 == 0:
                 print('.', file=sys.stderr, end=' ')
 
         if args.limit and line_no == args.limit:
@@ -212,7 +208,6 @@ if args.twitter:
             # exclude empty tweets
             if body is None:
                 continue
-
 
             ############################
             # retrieve relevant fields #
@@ -242,7 +237,7 @@ if args.twitter:
             if 'da' not in languages:
                 continue
 
-            regions = user['actor']['NUTS%s' % args.nuts_level]['region']
+            user_regions = user['actor']['NUTS%s' % args.nuts_level]['region']
 
             if body:
                 text = re.sub(numbers, '0', body)
@@ -251,14 +246,15 @@ if args.twitter:
                 text = re.sub(urls, '', text)
 
                 # TODO: better stopword filter
-                words = (' '.join([' '.join(filter(lambda w: len(w) > 3, word_tokenizer.tokenize(x))) for x in sentence_tokenizer.tokenize(text)]).lower()).split()
+                words = (' '.join([' '.join(filter(lambda w: len(w) > 3, word_tokenizer.tokenize(x))) for x in
+                                   sentence_tokenizer.tokenize(text)]).lower()).split()
                 if args.stem:
                     words = map(stemmer.stem, words)
                     words = list(filter(lambda word: word != '', words))
 
                 for word in words:
                     # if user belongs to several regions, update all of them
-                    for target in regions:
+                    for target in user_regions:
                         # if target == 'DK014':
                         #     continue
                         counts[word][target] += 1
@@ -288,14 +284,12 @@ if args.idf:
 print('Vocab size with at least %s occurrences: %s' % (args.N, len(top_N)), file=sys.stderr)
 print(top_N[:50])
 
-
 # compute vocab distro per region
 distros = []
 for target in regions:
     frequencies = np.array([counts[word][target] for word in top_N])
     distro = frequencies / frequencies.sum()
     distros.append(distro)
-
 
 # 2 stats
 all_distros = np.array(distros)
@@ -309,11 +303,10 @@ for i, row in enumerate(all_distros):
     m = all_distros[rest_indices].mean(axis=0)
     g2 = np.log(row / m)
     top_vocab = g2.argsort()[-50:]
-    g2_file.write("%s\n\n" % '\n'.join('%s\t%s\t%s' % (regions[i], w, g) for (w, g) in reversed(list(zip([top_N[x] for x in top_vocab], [g2[x] for x in top_vocab])))))
+    g2_file.write("%s\n\n" % '\n'.join('%s\t%s\t%s' % (regions[i], w, g) for (w, g) in
+                                       reversed(list(zip([top_N[x] for x in top_vocab], [g2[x] for x in top_vocab])))))
 
 g2_file.close()
-
-
 
 # compute matrix L, Lasker's distance between regions based on vocab distros
 distance_function = distances[args.distance]
@@ -321,12 +314,12 @@ L = pd.DataFrame(0.0, index=regions, columns=regions)
 for i, x in enumerate(distros):
     for j, y in enumerate(distros[i:]):
         r1 = regions[i]
-        r2 = regions[i+j]
+        r2 = regions[i + j]
         L.ix[r1, r2] = distance_function(x, y)
         L.ix[r2, r1] = distance_function(y, x)
 
 if args.geo:
-    print('\nDistances in km:\n', D.to_latex(float_format=lambda x: '%.2f'% x), file=sys.stderr)
+    print('\nDistances in km:\n', D.to_latex(float_format=lambda x: '%.2f' % x), file=sys.stderr)
 
 # print("\nLinguistic distances:\n", L.to_latex(), file=sys.stderr)
 
@@ -344,7 +337,6 @@ Y = L
 if args.geo:
     Y = D
     print('\nmulitplied:\n', Y)
-
 
 # row_linkage = hierarchy.linkage(
 #     distance.pdist(Y), method='average')
@@ -378,19 +370,14 @@ if args.clusters:
             mean_rest = all_distros[rest_indices].mean(axis=0)
             mean_in = all_distros[in_cluster].mean(axis=0)
 
-            g2 = np.log(mean_in/ mean_rest)
+            g2 = np.log(mean_in / mean_rest)
             top_vocab = g2.argsort()[-50:]
-            g2_file.write('Cluster %s: %s\n' %  (i, ', '.join([regions[x] for x in in_cluster])))
-            g2_file.write("%s\n\n" % '\n'.join('\t%s\t%s' % (w, g) for (w, g) in reversed(list(zip([top_N[x] for x in top_vocab], [g2[x] for x in top_vocab])))))
+            g2_file.write('Cluster %s: %s\n' % (i, ', '.join([regions[x] for x in in_cluster])))
+            g2_file.write("%s\n\n" % '\n'.join('\t%s\t%s' % (w, g) for (w, g) in reversed(
+                list(zip([top_N[x] for x in top_vocab], [g2[x] for x in top_vocab])))))
 
         g2_file.close()
-
 
 # plot clusters on map
 if args.show:
     plt.show()
-
-
-
-
-
