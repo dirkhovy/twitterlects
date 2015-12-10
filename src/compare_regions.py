@@ -15,7 +15,7 @@ from nltk.stem import SnowballStemmer
 from nltk.tokenize import WordPunctTokenizer
 from numpy.linalg import norm
 from scipy.stats import entropy
-from shapely.geometry import shape
+from shapely.geometry import shape, Point, Polygon
 from sklearn.cluster import AgglomerativeClustering
 
 sns.set(font="monospace")
@@ -314,15 +314,27 @@ if args.twitter:
             except KeyError:
                 pass
 
-            if 'da' not in languages:
+            if 'da' not in languages and 'no' not in languages:
                 continue
 
             if args.target == 'region':
                 user_regions = user['actor']['NUTS%s' % args.nuts_level]['region']
+
             elif args.target == 'coords':
-                #TODO: get user coords, not tweet coords
                 user_regions = []
-                pass
+                try:
+                    # lat, lng
+                    user_regions = [tuple(user['geo']['coordinates'])]
+                except KeyError:
+                    try:
+                        coords = list(Point(Polygon(user['location']['geo']['coordinates'][0]).centroid).coords)[0]
+                        user_regions = [(coords[1], coords[0])]
+                    except KeyError:
+                        pass
+                    except NotImplementedError:
+                        pass
+
+                user_regions = [(float('%.1f' % user_lat), float('%.1f' % user_lng)) for (user_lat, user_lng) in user_regions]
 
             if body:
                 text = re.sub(numbers, '0', body)
@@ -349,15 +361,19 @@ if args.twitter:
                 for w, word in enumerate(words):
                     if org_words[w][0].isupper():
                         noun_propensity[word] += 1
+                    for target in user_regions:
+                        counts[word][target] += 1
 
-                    counts[word][target] += 1
                 review_frequency.update(set(words))
 
-        except ValueError:
+        except ValueError as ve:
+            # print(ve, file=sys.stderr)
             continue
-        except KeyError:
+        except KeyError as ke:
+            # print(ke, file=sys.stderr)
             continue
 
+# filter out nouns
 if args.nounfilter:
     non_nouns = set([w for w, c in counts.items() if noun_propensity[w]/sum(c.values()) < 0.9])
     counts = {word: counts[word] for word in non_nouns}
