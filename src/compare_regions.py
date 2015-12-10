@@ -103,6 +103,8 @@ if args.stem:
     info.append('stemmed')
 if args.geo:
     info.append('geo-distance')
+if args.nounfilter:
+    info.append('nouns-filtered')
 
 regions = []
 region_centers = {}
