@@ -5,6 +5,7 @@ import sys
 from collections import defaultdict, Counter
 from itertools import islice, takewhile
 from math import radians, cos
+
 import fiona
 import matplotlib.pyplot as plt
 import nltk.data
@@ -88,7 +89,9 @@ parser.add_argument('--stem', help='stem words', action='store_true', default=Fa
 parser.add_argument('--geo', help='use geographic distance', action='store_true', default=False)
 parser.add_argument('--distance', choices=['kl', 'laskers', 'js'], help='similarity function on vocab', default='js')
 parser.add_argument('--target', choices=['region', 'gender', 'coords'], help='target variable', default='region')
-parser.add_argument('--nounfilter', help='filter out words that are uppercase 90% of cases', action='store_true')
+parser.add_argument('--nounfilter',
+                    help='filter out words that are uppercase at least N% of cases in non-initial contexts (1.0=include all, 0.0=allow nouppercase whatsoever)',
+                    default=1.0, type=float)
 
 args = parser.parse_args()
 
@@ -119,7 +122,6 @@ stemmer = SnowballStemmer(country2lang[args.country])
 
 inverted_stems = defaultdict(set)
 noun_propensity = defaultdict(int)
-
 
 # determine target of the aggregation: gender, NUTS region, or geo-coordinate
 if args.target == 'region':
@@ -169,12 +171,13 @@ elif args.target == 'coords':
     regions_set = set(regions)
     covered = set()
     for i, (lat1, lng1) in enumerate(regions):
-        if i > 0 and i%100 == 0:
+        if i > 0 and i % 100 == 0:
             print(i, file=sys.stderr)
-        elif i%10 == 0:
+        elif i % 10 == 0:
             print('.', file=sys.stderr, end='')
 
-        neighbors = [(lat1+lat_dist, lng1+lng_dist) for lat_dist in [-0.2, 0.0, 0.2] for lng_dist in [-0.2, 0.0, 0.2] if (lat_dist != 0.0 or lng_dist != 0.0)]
+        neighbors = [(lat1 + lat_dist, lng1 + lng_dist) for lat_dist in [-0.2, 0.0, 0.2] for lng_dist in
+                     [-0.2, 0.0, 0.2] if (lat_dist != 0.0 or lng_dist != 0.0)]
         neighbors = set(neighbors).difference(covered)
         neighbors = neighbors.intersection(regions_set)
         covered.update(neighbors)
@@ -190,7 +193,6 @@ else:
 
 region_name2int = dict([(name, i) for (i, name) in enumerate(regions)])
 review_frequency = Counter()
-
 
 # compute matrix D, distances between regions
 if args.geo:
@@ -209,7 +211,6 @@ if args.geo:
                 x = get_shortest_in(lat_lng1, lat_lng2)[0]
                 D.ix[lat_lng1, lat_lng2] = x
                 D.ix[lat_lng2, lat_lng1] = x
-
 
 # collect total vocab
 counts = defaultdict(lambda: defaultdict(lambda: 1))
@@ -250,7 +251,7 @@ if args.trustpilot:
                         text = re.sub(r'\n', ' ', text)
                         # TODO: better stopword filter
                         org_words = (' '.join([' '.join(word_tokenizer.tokenize(x)) for x in
-                                           sentence_tokenizer.tokenize(text)])).split()
+                                               sentence_tokenizer.tokenize(text)])).split()
                         words_lower = list(map(str.lower, org_words))
 
                         if args.stem:
@@ -262,7 +263,6 @@ if args.trustpilot:
                             words = list(filter(lambda word: word != '', stemmed_words))
                         else:
                             words = org_words
-
 
                         for w, word in enumerate(words):
                             if org_words[w][0].isupper():
@@ -340,7 +340,8 @@ if args.twitter:
                     except NotImplementedError:
                         pass
 
-                user_regions = [(float('%.1f' % user_lat), float('%.1f' % user_lng)) for (user_lat, user_lng) in user_regions]
+                user_regions = [(float('%.1f' % user_lat), float('%.1f' % user_lng)) for (user_lat, user_lng) in
+                                user_regions]
 
             if body:
                 text = re.sub(numbers, '0', body)
@@ -350,7 +351,7 @@ if args.twitter:
 
                 # TODO: better stopword filter
                 org_words = (' '.join([' '.join(word_tokenizer.tokenize(x)) for x in
-                                   sentence_tokenizer.tokenize(text)])).split()
+                                       sentence_tokenizer.tokenize(text)])).split()
                 words_lower = list(map(str.lower, org_words))
 
                 if args.stem:
@@ -363,9 +364,8 @@ if args.twitter:
                 else:
                     words = org_words
 
-
                 for w, word in enumerate(words):
-                    if org_words[w][0].isupper():
+                    if w > 0 and org_words[w][0].isupper() and not org_words[w].isupper():
                         noun_propensity[word] += 1
                     for target in user_regions:
                         counts[word][target] += 1
@@ -381,7 +381,7 @@ if args.twitter:
 
 # filter out nouns
 if args.nounfilter:
-    non_nouns = set([w for w, c in counts.items() if noun_propensity[w]/sum(c.values()) < 0.9])
+    non_nouns = set([w for w, c in counts.items() if noun_propensity[w] / sum(c.values()) < args.nounfilter])
     counts = {word: counts[word] for word in non_nouns}
 print('Total vocab size: %s' % len(counts), file=sys.stderr)
 
@@ -433,11 +433,13 @@ for i, row in enumerate(all_distros):
 
     if args.stem:
         g2_file.write("%s\n\n" % '\n'.join('%s\t%s\t%s' % (regions[i], w, g) for (w, g) in
-                                       reversed(list(zip([min(inverted_stems[top_N[x]]) for x in top_vocab], [g2[x] for x in top_vocab])))))
+                                           reversed(list(zip([min(inverted_stems[top_N[x]]) for x in top_vocab],
+                                                             [g2[x] for x in top_vocab])))))
 
     else:
         g2_file.write("%s\n\n" % '\n'.join('%s\t%s\t%s' % (regions[i], w, g) for (w, g) in
-                                       reversed(list(zip([top_N[x] for x in top_vocab], [g2[x] for x in top_vocab])))))
+                                           reversed(
+                                               list(zip([top_N[x] for x in top_vocab], [g2[x] for x in top_vocab])))))
 
 g2_file.close()
 
@@ -508,10 +510,10 @@ if args.clusters:
             g2_file.write('Cluster %s: %s\n' % (i, ', '.join([str(regions[x]) for x in in_cluster])))
             if args.stem:
                 g2_file.write("%s\n\n" % '\n'.join('\t%s\t%s' % (w, g) for (w, g) in reversed(
-                list(zip([min(inverted_stems[top_N[x]]) for x in top_vocab], [g2[x] for x in top_vocab])))))
+                    list(zip([min(inverted_stems[top_N[x]]) for x in top_vocab], [g2[x] for x in top_vocab])))))
             else:
                 g2_file.write("%s\n\n" % '\n'.join('\t%s\t%s' % (w, g) for (w, g) in reversed(
-                list(zip([top_N[x] for x in top_vocab], [g2[x] for x in top_vocab])))))
+                    list(zip([top_N[x] for x in top_vocab], [g2[x] for x in top_vocab])))))
 
         g2_file.close()
 
