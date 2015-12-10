@@ -97,6 +97,10 @@ country2lang = {'denmark': 'danish', 'germany': 'german', 'france': 'french'}
 country2nuts = {'denmark': 'DK', 'germany': 'DE', 'france': 'FR'}
 
 info = [args.country, 'min%s' % args.N, 'NUTS-%s' % args.nuts_level, args.distance]
+if args.trustpilot:
+    info.append('Trustpilot')
+if args.twitter:
+    info.append('Twitter')
 if args.idf:
     info.append('IDF')
 if args.stem:
