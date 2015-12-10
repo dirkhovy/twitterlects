@@ -26,6 +26,18 @@ numbers = re.compile(r"[0123456789]")
 names = re.compile(r"@[^ ]*")
 urls = re.compile(r"http[^ ]*")
 
+# latitudes are the bigger numbers, going N-S, longitude are the smaller numbers, going W-E
+country_boxes = {
+    'denmark': [54.5, 58., 7.5, 15.5],
+    'germany': [47., 55.5, 5.5, 15.5],
+    'france': [41., 51.5, -5.5, 10.],
+    'usa_all': [18., 72., -180., -67.5],
+    'usa': [24., 50., -125., -65.5],
+    'world': [-60., 75., -179., 179.],
+    'europe': [36., 70., -11., 40.],
+    'uk': [49.5, 61., -11., 2.]
+}
+
 
 def laskers(x, y):
     return -np.log2(x.dot(y))
@@ -75,7 +87,8 @@ parser.add_argument('--show', help='show dendrogram', action='store_true', defau
 parser.add_argument('--stem', help='stem words', action='store_true', default=False)
 parser.add_argument('--geo', help='use geographic distance', action='store_true', default=False)
 parser.add_argument('--distance', choices=['kl', 'laskers', 'js'], help='similarity function on vocab', default='js')
-parser.add_argument('--target', choices=['region', 'gender'], help='target variable', default='region')
+parser.add_argument('--target', choices=['region', 'gender', 'coords'], help='target variable', default='region')
+parser.add_argument('--nounfilter', help='filter out words that are uppercase 90% of cases', action='store_true')
 
 args = parser.parse_args()
 
@@ -98,6 +111,11 @@ word_tokenizer = WordPunctTokenizer()
 sentence_tokenizer = nltk.data.load('tokenizers/punkt/%s.pickle' % (country2lang[args.country]))
 stemmer = SnowballStemmer(country2lang[args.country])
 
+inverted_stems = defaultdict(set)
+noun_propensity = defaultdict(int)
+
+
+# determine target of the aggregation: gender, NUTS region, or geo-coordinate
 if args.target == 'region':
     print("reading NUTS...", file=sys.stderr)
     fiona_shapes = fiona.open(args.nuts)
@@ -124,6 +142,40 @@ if args.target == 'region':
             if i == j:
                 continue
             adjacency.iloc[i, j] = nuts_shape.intersects(shapes[j])
+            # TODO: what about the inverse?
+
+    print(adjacency, file=sys.stderr)
+
+# geo-coordinates are 0.1 increments of lat-lng pairs, based on the country's bounding box
+elif args.target == 'coords':
+    country_lats = np.arange(country_boxes[args.country][0], country_boxes[args.country][1], 0.2)
+    country_lngs = np.arange(country_boxes[args.country][2], country_boxes[args.country][3], 0.2)
+
+    for lat in country_lats:
+        lat = float('%.1f' % lat)
+        for lng in country_lngs:
+            lng = float('%.1f' % lng)
+            regions.append((lat, lng))
+    print("%s regions" % len(regions))
+
+    print("computing adjacency...", file=sys.stderr)
+    adjacency = pd.DataFrame(False, index=regions, columns=regions)
+    regions_set = set(regions)
+    covered = set()
+    for i, (lat1, lng1) in enumerate(regions):
+        if i > 0 and i%100 == 0:
+            print(i, file=sys.stderr)
+        elif i%10 == 0:
+            print('.', file=sys.stderr, end='')
+
+        neighbors = [(lat1+lat_dist, lng1+lng_dist) for lat_dist in [-0.2, 0.0, 0.2] for lng_dist in [-0.2, 0.0, 0.2] if (lat_dist != 0.0 or lng_dist != 0.0)]
+        neighbors = set(neighbors).difference(covered)
+        neighbors = neighbors.intersection(regions_set)
+        covered.update(neighbors)
+
+        for neighbor in neighbors:
+            adjacency.ix[(lat1, lng1), neighbor] = True
+            adjacency.ix[neighbor, (lat1, lng1)] = True
 
     print(adjacency, file=sys.stderr)
 
@@ -133,15 +185,25 @@ else:
 region_name2int = dict([(name, i) for (i, name) in enumerate(regions)])
 review_frequency = Counter()
 
+
 # compute matrix D, distances between regions
 if args.geo:
     D = pd.DataFrame(0.0, index=regions, columns=regions)  # np.zeros((len(regions), len(regions)), dtype=float)
-    for i, r1 in enumerate(regions):
-        for j, r2 in enumerate(regions[i + 1:]):
-            x = get_shortest_in(region_centers[r1], np.array(region_centers[r2]))[0]
-            # x = np.log(get_shortest_in(region_centers[r1], np.array(region_centers[r2]))[0])
-            D.ix[r1, r2] = x
-            D.ix[r2, r1] = x
+
+    if args.target == 'region':
+        for i, r1 in enumerate(regions):
+            for j, r2 in enumerate(regions[i + 1:]):
+                x = get_shortest_in(region_centers[r1], np.array(region_centers[r2]))[0]
+                # x = np.log(get_shortest_in(region_centers[r1], np.array(region_centers[r2]))[0])
+                D.ix[r1, r2] = x
+                D.ix[r2, r1] = x
+    elif args.target == 'coords':
+        for i, lat_lng1 in enumerate(regions):
+            for j, lat_lng2 in enumerate(regions[i + 1:]):
+                x = get_shortest_in(lat_lng1, lat_lng2)[0]
+                D.ix[lat_lng1, lat_lng2] = x
+                D.ix[lat_lng2, lat_lng1] = x
+
 
 # collect total vocab
 counts = defaultdict(lambda: defaultdict(lambda: 1))
@@ -160,7 +222,14 @@ if args.trustpilot:
         try:
             user = json.loads(line)
             reviews = user.get('reviews', None)
-            target = user['NUTS-%s' % args.nuts_level] if args.target == 'region' else user.get('gender', None)
+            if args.target == 'region':
+                target = user['NUTS-%s' % args.nuts_level]
+            elif args.target == 'coords':
+                user_lat = '%.1f' % float(user['geocodes'][0]['lat'])
+                user_lng = '%.1f' % float(user['geocodes'][0]['lng'])
+                target = (float(user_lat), float(user_lng))
+            else:
+                target = user.get('gender', None)
 
             # if target == 'DK014':
             #     continue
@@ -174,14 +243,25 @@ if args.trustpilot:
                         text = re.sub(urls, '', text)
                         text = re.sub(r'\n', ' ', text)
                         # TODO: better stopword filter
-                        # words = (' '.join([' '.join(filter(lambda w: len(w) > 3, word_tokenizer.tokenize(x))) for x in sentence_tokenizer.tokenize(text)]).lower()).split()
-                        words = (' '.join([' '.join(word_tokenizer.tokenize(x)) for x in
-                                           sentence_tokenizer.tokenize(text)]).lower()).split()
-                        if args.stem:
-                            words = map(stemmer.stem, words)
-                            words = list(filter(lambda word: word != '', words))
+                        org_words = (' '.join([' '.join(word_tokenizer.tokenize(x)) for x in
+                                           sentence_tokenizer.tokenize(text)])).split()
+                        words_lower = list(map(str.lower, org_words))
 
-                        for word in words:
+                        if args.stem:
+                            stemmed_words = list(map(stemmer.stem, org_words))
+                            # update inverted index
+                            for stem, word in zip(stemmed_words, words_lower):
+                                inverted_stems[stem].add(word)
+
+                            words = list(filter(lambda word: word != '', stemmed_words))
+                        else:
+                            words = org_words
+
+
+                        for w, word in enumerate(words):
+                            if org_words[w][0].isupper():
+                                noun_propensity[word] += 1
+
                             counts[word][target] += 1
                         review_frequency.update(set(words))
 
@@ -237,7 +317,12 @@ if args.twitter:
             if 'da' not in languages:
                 continue
 
-            user_regions = user['actor']['NUTS%s' % args.nuts_level]['region']
+            if args.target == 'region':
+                user_regions = user['actor']['NUTS%s' % args.nuts_level]['region']
+            elif args.target == 'coords':
+                #TODO: get user coords, not tweet coords
+                user_regions = []
+                pass
 
             if body:
                 text = re.sub(numbers, '0', body)
@@ -246,19 +331,26 @@ if args.twitter:
                 text = re.sub(urls, '', text)
 
                 # TODO: better stopword filter
-                words = (' '.join([' '.join(filter(lambda w: len(w) > 3, word_tokenizer.tokenize(x))) for x in
-                                   sentence_tokenizer.tokenize(text)]).lower()).split()
+                org_words = (' '.join([' '.join(word_tokenizer.tokenize(x)) for x in
+                                   sentence_tokenizer.tokenize(text)])).split()
+                words_lower = list(map(str.lower, org_words))
+
                 if args.stem:
-                    words = map(stemmer.stem, words)
-                    words = list(filter(lambda word: word != '', words))
+                    stemmed_words = list(map(stemmer.stem, org_words))
+                    # update inverted index
+                    for stem, word in zip(stemmed_words, words_lower):
+                        inverted_stems[stem].add(word)
 
-                for word in words:
-                    # if user belongs to several regions, update all of them
-                    for target in user_regions:
-                        # if target == 'DK014':
-                        #     continue
-                        counts[word][target] += 1
+                    words = list(filter(lambda word: word != '', stemmed_words))
+                else:
+                    words = org_words
 
+
+                for w, word in enumerate(words):
+                    if org_words[w][0].isupper():
+                        noun_propensity[word] += 1
+
+                    counts[word][target] += 1
                 review_frequency.update(set(words))
 
         except ValueError:
@@ -266,6 +358,9 @@ if args.twitter:
         except KeyError:
             continue
 
+if args.nounfilter:
+    non_nouns = set([w for w, c in counts.items() if noun_propensity[w]/sum(c.values()) < 0.9])
+    counts = {word: counts[word] for word in non_nouns}
 print('Total vocab size: %s' % len(counts), file=sys.stderr)
 
 # throw out words seen less than N times
@@ -283,6 +378,16 @@ if args.idf:
 
 print('Vocab size with at least %s occurrences: %s' % (args.N, len(top_N)), file=sys.stderr)
 print(top_N[:50])
+
+if args.stem:
+    print('Writing stem indices...', file=sys.stderr)
+    stem_file = open('%s%s.inverted_stems.tsv' % (args.prefix, '.'.join(info)), 'w')
+    for stem, words in inverted_stems.items():
+        stem_file.write("%s\t%s\n" % (stem, ', '.join(words)))
+    stem_file.close()
+    print('done', file=sys.stderr)
+
+print('Computing distribution...', file=sys.stderr)
 
 # compute vocab distro per region
 distros = []
@@ -303,12 +408,18 @@ for i, row in enumerate(all_distros):
     m = all_distros[rest_indices].mean(axis=0)
     g2 = np.log(row / m)
     top_vocab = g2.argsort()[-50:]
-    g2_file.write("%s\n\n" % '\n'.join('%s\t%s\t%s' % (regions[i], w, g) for (w, g) in
+
+    if args.stem:
+        g2_file.write("%s\n\n" % '\n'.join('%s\t%s\t%s' % (regions[i], w, g) for (w, g) in
+                                       reversed(list(zip([min(inverted_stems[top_N[x]]) for x in top_vocab], [g2[x] for x in top_vocab])))))
+
+    else:
+        g2_file.write("%s\n\n" % '\n'.join('%s\t%s\t%s' % (regions[i], w, g) for (w, g) in
                                        reversed(list(zip([top_N[x] for x in top_vocab], [g2[x] for x in top_vocab])))))
 
 g2_file.close()
 
-# compute matrix L, Lasker's distance between regions based on vocab distros
+# compute matrix L, distance between regions based on vocab distros
 distance_function = distances[args.distance]
 L = pd.DataFrame(0.0, index=regions, columns=regions)
 for i, x in enumerate(distros):
@@ -372,8 +483,12 @@ if args.clusters:
 
             g2 = np.log(mean_in / mean_rest)
             top_vocab = g2.argsort()[-50:]
-            g2_file.write('Cluster %s: %s\n' % (i, ', '.join([regions[x] for x in in_cluster])))
-            g2_file.write("%s\n\n" % '\n'.join('\t%s\t%s' % (w, g) for (w, g) in reversed(
+            g2_file.write('Cluster %s: %s\n' % (i, ', '.join([str(regions[x]) for x in in_cluster])))
+            if args.stem:
+                g2_file.write("%s\n\n" % '\n'.join('\t%s\t%s' % (w, g) for (w, g) in reversed(
+                list(zip([min(inverted_stems[top_N[x]]) for x in top_vocab], [g2[x] for x in top_vocab])))))
+            else:
+                g2_file.write("%s\n\n" % '\n'.join('\t%s\t%s' % (w, g) for (w, g) in reversed(
                 list(zip([top_N[x] for x in top_vocab], [g2[x] for x in top_vocab])))))
 
         g2_file.close()
