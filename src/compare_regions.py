@@ -1,23 +1,27 @@
 import argparse
+import bisect
 import json
 import re
 import sys
-from collections import defaultdict, Counter
-from itertools import islice, takewhile
-from math import radians, cos
-
 import fiona
 import matplotlib.pyplot as plt
 import nltk.data
 import numpy as np
 import pandas as pd
 import seaborn as sns
+
 from nltk.stem import SnowballStemmer
 from nltk.tokenize import WordPunctTokenizer
+from numba import jit
 from numpy.linalg import norm
 from scipy.stats import entropy
 from shapely.geometry import shape, Point, Polygon
 from sklearn.cluster import AgglomerativeClustering
+from collections import defaultdict, Counter
+from itertools import islice, takewhile
+from math import radians, cos
+from nltk.corpus import stopwords
+
 
 sns.set(font="monospace")
 sns.set_context('poster')
@@ -47,7 +51,7 @@ def laskers(x, y):
 def kl(x, y):
     return entropy(x, y)
 
-
+@jit
 def js(P, Q):
     _P = P / norm(P, ord=1)
     _Q = Q / norm(Q, ord=1)
@@ -74,30 +78,40 @@ def get_shortest_in(needle, haystack):
 parser = argparse.ArgumentParser(description="compare regions")
 parser.add_argument('--trustpilot', help='input file')
 parser.add_argument('--twitter', help='input file')
+parser.add_argument('--clusters', help='number of clusters, can be CSV', type=str, default=None)
+parser.add_argument('--coord_size', help='size of coordinate grid in degrees', default=0.2, type=float)
 parser.add_argument('--country', choices=['denmark', 'germany', 'france'], help='which country to use',
                     default='denmark')
+parser.add_argument('--distance', choices=['kl', 'laskers', 'js'], help='similarity function on vocab', default='js')
+parser.add_argument('--geo', help='use geographic distance', action='store_true', default=False)
+parser.add_argument('--idf', help='weigh vocabulary terms by IDF', action='store_true', default=False)
+parser.add_argument('--limit', help='max instances', type=int, default=None)
+parser.add_argument('--nounfilter',
+                    help='filter out words that are uppercase at least N% of cases in non-initial contexts (1.0=include all, 0.0=allow nouppercase whatsoever)',
+                    default=1.0, type=float)
+parser.add_argument('--num_neighbors', help='number of neighbors in coordinate grid', default=2, type=int)
 parser.add_argument('--nuts', help='NUTS regions shape file',
                     default="/Users/dirkhovy/working/lowlands/GeoStats/data/nuts/NUTS_RG_03M_2010.shp")
 parser.add_argument('--nuts_level', help='NUTS level', type=int, default=2)
 parser.add_argument('--N', help='minimum occurrence of words', type=int, default=10)
-parser.add_argument('--limit', help='max instances', type=int, default=None)
-parser.add_argument('--clusters', help='number of clusters, can be CSV', type=str, default=None)
 parser.add_argument('--prefix', help='output prefix', type=str, default='output')
-parser.add_argument('--idf', help='weigh vocabulary terms by IDF', action='store_true', default=False)
 parser.add_argument('--show', help='show dendrogram', action='store_true', default=False)
 parser.add_argument('--stem', help='stem words', action='store_true', default=False)
-parser.add_argument('--geo', help='use geographic distance', action='store_true', default=False)
-parser.add_argument('--distance', choices=['kl', 'laskers', 'js'], help='similarity function on vocab', default='js')
+parser.add_argument('--stopwords', help='stopwords', type=str)
 parser.add_argument('--target', choices=['region', 'gender', 'coords'], help='target variable', default='region')
-parser.add_argument('--nounfilter',
-                    help='filter out words that are uppercase at least N% of cases in non-initial contexts (1.0=include all, 0.0=allow nouppercase whatsoever)',
-                    default=1.0, type=float)
 
 args = parser.parse_args()
 
 distances = {'kl': kl, 'laskers': laskers, 'js': js}
 country2lang = {'denmark': 'danish', 'germany': 'german', 'france': 'french'}
 country2nuts = {'denmark': 'DK', 'germany': 'DE', 'france': 'FR'}
+country_lats = np.arange(country_boxes[args.country][0], country_boxes[args.country][1], args.coord_size)
+country_lngs = np.arange(country_boxes[args.country][2], country_boxes[args.country][3], args.coord_size)
+
+if args.stopwords:
+    stops = set(stopwords.words(args.stopwords))
+else:
+    stops = set()
 
 info = [args.country, 'min%s' % args.N, 'NUTS-%s' % args.nuts_level, args.distance]
 if args.trustpilot:
@@ -112,6 +126,8 @@ if args.geo:
     info.append('geo-distance')
 if args.nounfilter:
     info.append('nouns-filtered')
+if args.stopwords:
+    info.append('stopword-filtered')
 
 regions = []
 region_centers = {}
@@ -156,13 +172,11 @@ if args.target == 'region':
 
 # geo-coordinates are 0.1 increments of lat-lng pairs, based on the country's bounding box
 elif args.target == 'coords':
-    country_lats = np.arange(country_boxes[args.country][0], country_boxes[args.country][1], 0.2)
-    country_lngs = np.arange(country_boxes[args.country][2], country_boxes[args.country][3], 0.2)
+    num_lats = country_lats.shape[0]
+    num_lngs = country_lngs.shape[0]
 
-    for lat in country_lats:
-        lat = float('%.1f' % lat)
-        for lng in country_lngs:
-            lng = float('%.1f' % lng)
+    for lat in range(num_lats):
+        for lng in range(num_lngs):
             regions.append((lat, lng))
     print("%s regions" % len(regions))
 
@@ -170,22 +184,16 @@ elif args.target == 'coords':
     adjacency = pd.DataFrame(False, index=regions, columns=regions)
     regions_set = set(regions)
     covered = set()
-    for i, (lat1, lng1) in enumerate(regions):
-        if i > 0 and i % 100 == 0:
-            print(i, file=sys.stderr)
-        elif i % 10 == 0:
-            print('.', file=sys.stderr, end='')
-
-        neighbors = [(lat1 + lat_dist, lng1 + lng_dist) for lat_dist in [-0.2, 0.0, 0.2] for lng_dist in
-                     [-0.2, 0.0, 0.2] if (lat_dist != 0.0 or lng_dist != 0.0)]
-        neighbors = set(neighbors).difference(covered)
-        neighbors = neighbors.intersection(regions_set)
-        covered.update(neighbors)
-
-        for neighbor in neighbors:
-            adjacency.ix[(lat1, lng1), neighbor] = True
-            adjacency.ix[neighbor, (lat1, lng1)] = True
-
+    num_neighbors = args.num_neighbors
+    for i in range(num_lats):
+        for j in range(num_lngs):
+            neighbors = [(i + lat_iterator, j + lng_iterator) for lat_iterator in
+                         list(range(-num_neighbors, num_neighbors + 1)) for lng_iterator in
+                         list(range(-num_neighbors, num_neighbors + 1))]
+            for neighbor in neighbors:
+                if neighbor in regions_set and neighbor != (i, j):
+                    adjacency.ix[(i, j), neighbor] = True
+                    adjacency.ix[neighbor, (i, j)] = True
     print(adjacency, file=sys.stderr)
 
 else:
@@ -206,8 +214,10 @@ if args.geo:
                 D.ix[r1, r2] = x
                 D.ix[r2, r1] = x
     elif args.target == 'coords':
-        for i, lat_lng1 in enumerate(regions):
-            for j, lat_lng2 in enumerate(regions[i + 1:]):
+        for i in enumerate(regions):
+            lat_lng1 = (country_lats[regions[i][0]], country_lngs[regions[i][1]])
+            for j in enumerate(regions[i + 1:]):
+                lat_lng2 = (country_lats[regions[j][0]], country_lngs[regions[j][1]])
                 x = get_shortest_in(lat_lng1, lat_lng2)[0]
                 D.ix[lat_lng1, lat_lng2] = x
                 D.ix[lat_lng2, lat_lng1] = x
@@ -232,9 +242,9 @@ if args.trustpilot:
             if args.target == 'region':
                 target = user['NUTS-%s' % args.nuts_level]
             elif args.target == 'coords':
-                user_lat = '%.1f' % float(user['geocodes'][0]['lat'])
-                user_lng = '%.1f' % float(user['geocodes'][0]['lng'])
-                target = (float(user_lat), float(user_lng))
+                user_lat = '%.3f' % float(user['geocodes'][0]['lat'])
+                user_lng = '%.3f' % float(user['geocodes'][0]['lng'])
+                target = (bisect.bisect(country_lats, float(user_lat)), bisect.bisect(country_lngs, float(user_lng)))
             else:
                 target = user.get('gender', None)
 
@@ -252,7 +262,8 @@ if args.trustpilot:
                         # TODO: better stopword filter
                         org_words = (' '.join([' '.join(word_tokenizer.tokenize(x)) for x in
                                                sentence_tokenizer.tokenize(text)])).split()
-                        words_lower = list(map(str.lower, org_words))
+                        org_words = [word for word in org_words if word not in stops]
+                        words_lower = [word.lower() for word in org_words]
 
                         if args.stem:
                             stemmed_words = list(map(stemmer.stem, org_words))
@@ -340,7 +351,7 @@ if args.twitter:
                     except NotImplementedError:
                         pass
 
-                user_regions = [(float('%.1f' % user_lat), float('%.1f' % user_lng)) for (user_lat, user_lng) in
+                user_regions = [(float('%.3f' % user_lat), float('%.3f' % user_lng)) for (user_lat, user_lng) in
                                 user_regions]
 
             if body:
@@ -422,8 +433,8 @@ for target in regions:
 all_distros = np.array(distros)
 row_indices = list(range(len(distros)))
 
+print('Computing region differences...', file=sys.stderr)
 g2_file = open('%s%s.G2-regions.tsv' % (args.prefix, '.'.join(info)), 'w')
-
 for i, row in enumerate(all_distros):
     rest_indices = row_indices.copy()
     rest_indices.remove(i)
@@ -444,14 +455,31 @@ for i, row in enumerate(all_distros):
 g2_file.close()
 
 # compute matrix L, distance between regions based on vocab distros
+print('Computing linguistic distances...', file=sys.stderr)
 distance_function = distances[args.distance]
 L = pd.DataFrame(0.0, index=regions, columns=regions)
+k = 0
+max_computations = int(len(regions)**2/2 + len(regions))
 for i, x in enumerate(distros):
     for j, y in enumerate(distros[i:]):
+        k += 1
+        if k > 0:
+            if k % 1000 == 0:
+                print('%s/%s' % (k, max_computations), file=sys.stderr)
+            elif k % 100 == 0:
+                print('.', file=sys.stderr, end='')
+
         r1 = regions[i]
         r2 = regions[i + j]
-        L.ix[r1, r2] = distance_function(x, y)
-        L.ix[r2, r1] = distance_function(y, x)
+        if args.distance == 'js':
+            distance = js(x, y)
+            L.ix[r1, r2] = distance
+            L.ix[r2, r1] = distance
+        else:
+            L.ix[r1, r2] = distance_function(x, y)
+            L.ix[r2, r1] = distance_function(y, x)
+
+print('%s' % (k), file=sys.stderr)
 
 if args.geo:
     print('\nDistances in km:\n', D.to_latex(float_format=lambda x: '%.2f' % x), file=sys.stderr)
@@ -482,6 +510,7 @@ if args.geo:
 # seaborn.clustermap(Y, col_cluster=False, standard_scale=1,row_linkage=row_linkage, col_linkage=col_linkage)
 
 # compute clusters over K
+print('Computing clusters...', file=sys.stderr)
 if args.clusters:
     for num_c in map(int, args.clusters.split(',')):
 
