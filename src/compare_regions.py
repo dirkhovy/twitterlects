@@ -113,7 +113,7 @@ if args.stopwords:
 else:
     stops = set()
 
-info = [args.country, 'min%s' % args.N, 'NUTS-%s' % args.nuts_level, args.distance]
+info = [args.country, 'min%s' % args.N, 'NUTS-%s' % args.nuts_level, args.distance, args.target]
 if args.trustpilot:
     info.append('Trustpilot')
 if args.twitter:
@@ -128,6 +128,9 @@ if args.nounfilter:
     info.append('nouns-filtered')
 if args.stopwords:
     info.append('stopword-filtered')
+if args.target == 'coords':
+    info.append('%s-neighbors.size-%s' % (args.num_neighbors, args.coord_size))
+
 
 regions = []
 region_centers = {}
