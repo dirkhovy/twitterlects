@@ -78,6 +78,7 @@ def get_shortest_in(needle, haystack):
 parser = argparse.ArgumentParser(description="compare regions")
 parser.add_argument('--trustpilot', help='input file')
 parser.add_argument('--twitter', help='input file')
+parser.add_argument('--bigrams', help='use bigrams', action="store_true")
 parser.add_argument('--clusters', help='number of clusters, can be CSV', type=str, default=None)
 parser.add_argument('--coord_size', help='size of coordinate grid in degrees', default=0.2, type=float)
 parser.add_argument('--country', choices=['denmark', 'germany', 'france'], help='which country to use',
@@ -229,6 +230,7 @@ if args.geo:
 counts = defaultdict(lambda: defaultdict(lambda: 1))
 
 if args.trustpilot:
+    print("\nProcessing Trustpilot", file=sys.stderr)
     for line_no, line in enumerate(islice(open(args.trustpilot), None)):
         if line_no > 0:
             if line_no % 1000 == 0:
@@ -251,9 +253,6 @@ if args.trustpilot:
             else:
                 target = user.get('gender', None)
 
-            # if target == 'DK014':
-            #     continue
-
             for review in reviews:
                 body = review.get('text', None)
                 # exclude empty reviews
@@ -265,7 +264,7 @@ if args.trustpilot:
                         # TODO: better stopword filter
                         org_words = (' '.join([' '.join(word_tokenizer.tokenize(x)) for x in
                                                sentence_tokenizer.tokenize(text)])).split()
-                        org_words = [word for word in org_words if word not in stops]
+                        org_words = [word for word in org_words if word.lower() not in stops and len(word) > 1]
                         words_lower = [word.lower() for word in org_words]
 
                         if args.stem:
@@ -285,12 +284,22 @@ if args.trustpilot:
                             counts[word][target] += 1
                         review_frequency.update(set(words))
 
+                        if args.bigrams:
+                            bigrams = [' '.join(bigram) for bigram in nltk.bigrams(words) if ' '.join(bigram).strip() is not '']
+                            for bigram in bigrams:
+                                counts[bigram][target] += 1
+                                if args.stem:
+                                    inverted_stems[bigram].add(bigram)
+                            review_frequency.update(set(bigrams))
+
+
         except ValueError:
             continue
         except KeyError:
             continue
 
 if args.twitter:
+    print("\nProcessing Twitter", file=sys.stderr)
     for line_no, line in enumerate(islice(open(args.twitter), None)):
         if line_no > 0:
             if line_no % 1000 == 0:
@@ -354,7 +363,7 @@ if args.twitter:
                     except NotImplementedError:
                         pass
 
-                user_regions = [(float('%.3f' % user_lat), float('%.3f' % user_lng)) for (user_lat, user_lng) in
+                user_regions = [(bisect.bisect(country_lats, float('%.3f' % user_lat)), bisect.bisect(country_lngs, float('%.3f' % user_lng))) for (user_lat, user_lng) in
                                 user_regions]
 
             if body:
@@ -366,6 +375,8 @@ if args.twitter:
                 # TODO: better stopword filter
                 org_words = (' '.join([' '.join(word_tokenizer.tokenize(x)) for x in
                                        sentence_tokenizer.tokenize(text)])).split()
+                org_words = [word for word in org_words if word.lower() not in stops and len(word) > 1]
+
                 words_lower = list(map(str.lower, org_words))
 
                 if args.stem:
@@ -383,8 +394,16 @@ if args.twitter:
                         noun_propensity[word] += 1
                     for target in user_regions:
                         counts[word][target] += 1
-
                 review_frequency.update(set(words))
+
+                if args.bigrams:
+                    bigrams = [' '.join(bigram) for bigram in nltk.bigrams(words) if ' '.join(bigram).strip() is not '']
+                    for bigram in bigrams:
+                        counts[bigram][target] += 1
+                        if args.stem:
+                            inverted_stems[bigram].add(bigram)
+                    review_frequency.update(set(bigrams))
+
 
         except ValueError as ve:
             # print(ve, file=sys.stderr)
@@ -462,17 +481,17 @@ print('Computing linguistic distances...', file=sys.stderr)
 distance_function = distances[args.distance]
 L = pd.DataFrame(0.0, index=regions, columns=regions)
 k = 0
-max_computations = int(len(regions)**2/2 + len(regions))
+max_computations = int(len(regions) * ((len(regions)+1)/2))
 for i, x in enumerate(distros):
+    r1 = regions[i]
     for j, y in enumerate(distros[i:]):
         k += 1
         if k > 0:
-            if k % 1000 == 0:
+            if k % 5000 == 0:
                 print('%s/%s' % (k, max_computations), file=sys.stderr)
             elif k % 100 == 0:
                 print('.', file=sys.stderr, end='')
 
-        r1 = regions[i]
         r2 = regions[i + j]
         if args.distance == 'js':
             distance = js(x, y)
