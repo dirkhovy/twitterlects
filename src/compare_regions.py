@@ -119,6 +119,8 @@ if args.trustpilot:
     info.append('Trustpilot')
 if args.twitter:
     info.append('Twitter')
+if args.bigrams:
+    info.append('bigrams')
 if args.idf:
     info.append('IDF')
 if args.stem:
