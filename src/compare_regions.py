@@ -1,6 +1,7 @@
 import argparse
 import bisect
 import json
+# import ujson as json
 import re
 import sys
 import fiona
@@ -81,14 +82,15 @@ parser.add_argument('--twitter', help='input file')
 parser.add_argument('--bigrams', help='use bigrams', action="store_true")
 parser.add_argument('--clusters', help='number of clusters, can be CSV', type=str, default=None)
 parser.add_argument('--coord_size', help='size of coordinate grid in degrees', default=0.2, type=float)
-parser.add_argument('--country', choices=['denmark', 'germany', 'france'], help='which country to use',
+parser.add_argument('--country', choices=['denmark', 'germany', 'france', 'uk'], help='which country to use',
                     default='denmark')
 parser.add_argument('--distance', choices=['kl', 'laskers', 'js'], help='similarity function on vocab', default='js')
 parser.add_argument('--geo', help='use geographic distance', action='store_true', default=False)
-parser.add_argument('--idf', help='weigh vocabulary terms by IDF', action='store_true', default=False)
+parser.add_argument('--idf', help='weigh vocabulary terms by IDF', choices=['docs', 'regions'], default=None)
 parser.add_argument('--limit', help='max instances', type=int, default=None)
+parser.add_argument('--linkage', help='linkage for clustering', choices=['complete', 'ward', 'average'], default='complete')
 parser.add_argument('--nounfilter',
-                    help='filter out words that are uppercase at least N% of cases in non-initial contexts (1.0=include all, 0.0=allow nouppercase whatsoever)',
+                    help='filter out words that are uppercase at least N% of cases in non-initial contexts (1.0=include all, 0.0=allow no uppercase whatsoever)',
                     default=1.0, type=float)
 parser.add_argument('--num_neighbors', help='number of neighbors in coordinate grid', default=2, type=int)
 parser.add_argument('--nuts', help='NUTS regions shape file',
@@ -104,8 +106,8 @@ parser.add_argument('--target', choices=['region', 'gender', 'coords'], help='ta
 args = parser.parse_args()
 
 distances = {'kl': kl, 'laskers': laskers, 'js': js}
-country2lang = {'denmark': 'danish', 'germany': 'german', 'france': 'french'}
-country2nuts = {'denmark': 'DK', 'germany': 'DE', 'france': 'FR'}
+country2lang = {'denmark': 'danish', 'germany': 'german', 'france': 'french', 'uk':'english'}
+country2nuts = {'denmark': 'DK', 'germany': 'DE', 'france': 'FR', 'uk': 'UK'}
 country_lats = np.arange(country_boxes[args.country][0], country_boxes[args.country][1], args.coord_size)
 country_lngs = np.arange(country_boxes[args.country][2], country_boxes[args.country][3], args.coord_size)
 
@@ -122,7 +124,7 @@ if args.twitter:
 if args.bigrams:
     info.append('bigrams')
 if args.idf:
-    info.append('IDF')
+    info.append('IDF-%s' % args.idf)
 if args.stem:
     info.append('stemmed')
 if args.geo:
@@ -263,7 +265,7 @@ if args.trustpilot:
                         text = re.sub(numbers, '0', text)
                         text = re.sub(urls, '', text)
                         text = re.sub(r'\n', ' ', text)
-                        # TODO: better stopword filter
+
                         org_words = (' '.join([' '.join(word_tokenizer.tokenize(x)) for x in
                                                sentence_tokenizer.tokenize(text)])).split()
                         org_words = [word for word in org_words if word.lower() not in stops and len(word) > 1]
@@ -420,18 +422,27 @@ if args.nounfilter:
     counts = {word: counts[word] for word in non_nouns}
 print('Total vocab size: %s' % len(counts), file=sys.stderr)
 
+
 # throw out words seen less than N times
 totals = Counter(dict(((k, sum(v.values())) for k, v in counts.items())))
 # get top N words
 top_N = [i[0] for i in takewhile(lambda f: f[1] > args.N, totals.most_common())]
 
+
 # idf transformation before normalization
 if args.idf:
     total_D = sum(review_frequency.values())
     for word, region_names in counts.items():
-        idf = np.log(total_D / (1 + review_frequency[word]))
+        # normalize by the number of documents it occurred in
+        if args.idf == 'docs':
+            idf = np.log(total_D / (1 + review_frequency[word]))
+        # normalize by the number of regions it occurred in
+        else:
+            idf = np.log(total_D / (1 + len(counts[word].keys())))
+
         for target in region_names:
             counts[word][target] *= idf
+
 
 print('Vocab size with at least %s occurrences: %s' % (args.N, len(top_N)), file=sys.stderr)
 print(top_N[:50])
@@ -479,22 +490,30 @@ for i, row in enumerate(all_distros):
 g2_file.close()
 
 # compute matrix L, distance between regions based on vocab distros
-print('Computing linguistic distances...', file=sys.stderr)
+print('Computing linguistic distances:', file=sys.stderr)
 distance_function = distances[args.distance]
 L = pd.DataFrame(0.0, index=regions, columns=regions)
 k = 0
-max_computations = int(len(regions) * ((len(regions)+1)/2))
+# max_computations = int(len(regions) * ((args.num_neighbors*2+1)**2)
 for i, x in enumerate(distros):
     r1 = regions[i]
+
+    r1_neighbors = set(adjacency[r1][adjacency[r1] == True].index.tolist())
+
     for j, y in enumerate(distros[i:]):
+
+        r2 = regions[i + j]
+
+        if r2 not in r1_neighbors:
+            continue
+
         k += 1
         if k > 0:
             if k % 5000 == 0:
-                print('%s/%s' % (k, max_computations), file=sys.stderr)
+                print('%s' % (k), file=sys.stderr)
             elif k % 100 == 0:
                 print('.', file=sys.stderr, end='')
 
-        r2 = regions[i + j]
         if args.distance == 'js':
             distance = js(x, y)
             L.ix[r1, r2] = distance
@@ -508,37 +527,19 @@ print('%s' % (k), file=sys.stderr)
 if args.geo:
     print('\nDistances in km:\n', D.to_latex(float_format=lambda x: '%.2f' % x), file=sys.stderr)
 
-# print("\nLinguistic distances:\n", L.to_latex(), file=sys.stderr)
 
-# C = (L).corr()#L.corrwith(D, axis=1)
-# print('\ncorrelation:\n', C)
-
-# combine L and D in matrix K, either pointwise or concatenated
-# LS = L.stack()
-# DS = D.stack()
-#
-# X = pd.DataFrame(data={'LS':LS, 'DS':DS})
-# X['region'] = [tup[0] for tup in X.index.get_values()]
-# Y = X.groupby('region').mean()
 Y = L
 if args.geo:
     Y = D
     print('\nmulitplied:\n', Y)
 
-# row_linkage = hierarchy.linkage(
-#     distance.pdist(Y), method='average')
-#
-# col_linkage = hierarchy.linkage(
-#     distance.pdist(Y.T), method='average')
-#
-# seaborn.clustermap(Y, col_cluster=False, standard_scale=1,row_linkage=row_linkage, col_linkage=col_linkage)
 
 # compute clusters over K
 print('Computing clusters...', file=sys.stderr)
 if args.clusters:
     for num_c in map(int, args.clusters.split(',')):
 
-        clustering = AgglomerativeClustering(linkage='complete', n_clusters=num_c, connectivity=adjacency)
+        clustering = AgglomerativeClustering(linkage=args.linkage, n_clusters=num_c, connectivity=adjacency)
         cluster_names = clustering.fit_predict(Y, adjacency)
         # region2cluster = list(zip(regions, hierarchy.fcluster(row_linkage, num_c, criterion='maxclust')))
         region2cluster = list(zip(regions, cluster_names))
