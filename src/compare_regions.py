@@ -10,7 +10,6 @@ import nltk.data
 import numpy as np
 import pandas as pd
 import seaborn as sns
-
 from nltk.stem import SnowballStemmer
 from nltk.tokenize import WordPunctTokenizer
 from numba import jit
@@ -22,7 +21,6 @@ from collections import defaultdict, Counter
 from itertools import islice, takewhile
 from math import radians, cos
 from nltk.corpus import stopwords
-
 
 sns.set(font="monospace")
 sns.set_context('poster')
@@ -51,6 +49,7 @@ def laskers(x, y):
 
 def kl(x, y):
     return entropy(x, y)
+
 
 @jit
 def js(P, Q):
@@ -81,18 +80,20 @@ parser.add_argument('--trustpilot', help='input file')
 parser.add_argument('--twitter', help='input file')
 parser.add_argument('--bigrams', help='use bigrams', action="store_true")
 parser.add_argument('--clusters', help='number of clusters, can be CSV', type=str, default=None)
-parser.add_argument('--coord_size', help='size of coordinate grid in degrees', default=0.2, type=float)
+parser.add_argument('--coord_size', help='size of coordinate grid in degrees', default=0.1, type=float)
 parser.add_argument('--country', choices=['denmark', 'germany', 'france', 'uk'], help='which country to use',
                     default='denmark')
 parser.add_argument('--distance', choices=['kl', 'laskers', 'js'], help='similarity function on vocab', default='js')
 parser.add_argument('--geo', help='use geographic distance', action='store_true', default=False)
 parser.add_argument('--idf', help='weigh vocabulary terms by IDF', choices=['docs', 'regions'], default=None)
 parser.add_argument('--limit', help='max instances', type=int, default=None)
-parser.add_argument('--linkage', help='linkage for clustering', choices=['complete', 'ward', 'average'], default='complete')
+parser.add_argument('--linkage', help='linkage for clustering', choices=['complete', 'ward', 'average'],
+                    default='complete')
+parser.add_argument('--min_support', help='minimum documents for a region to be counted', type=int, default=100)
 parser.add_argument('--nounfilter',
                     help='filter out words that are uppercase at least N% of cases in non-initial contexts (1.0=include all, 0.0=allow no uppercase whatsoever)',
                     default=1.0, type=float)
-parser.add_argument('--num_neighbors', help='number of neighbors in coordinate grid', default=2, type=int)
+parser.add_argument('--num_neighbors', help='number of neighbors in coordinate grid', default=5, type=int)
 parser.add_argument('--nuts', help='NUTS regions shape file',
                     default="/Users/dirkhovy/working/lowlands/GeoStats/data/nuts/NUTS_RG_03M_2010.shp")
 parser.add_argument('--nuts_level', help='NUTS level', type=int, default=2)
@@ -106,7 +107,7 @@ parser.add_argument('--target', choices=['region', 'gender', 'coords'], help='ta
 args = parser.parse_args()
 
 distances = {'kl': kl, 'laskers': laskers, 'js': js}
-country2lang = {'denmark': 'danish', 'germany': 'german', 'france': 'french', 'uk':'english'}
+country2lang = {'denmark': 'danish', 'germany': 'german', 'france': 'french', 'uk': 'english'}
 country2nuts = {'denmark': 'DK', 'germany': 'DE', 'france': 'FR', 'uk': 'UK'}
 country_lats = np.arange(country_boxes[args.country][0], country_boxes[args.country][1], args.coord_size)
 country_lngs = np.arange(country_boxes[args.country][2], country_boxes[args.country][3], args.coord_size)
@@ -135,7 +136,6 @@ if args.stopwords:
     info.append('stopword-filtered')
 if args.target == 'coords':
     info.append('%s-neighbors.size-%s' % (args.num_neighbors, args.coord_size))
-
 
 regions = []
 region_centers = {}
@@ -174,6 +174,7 @@ if args.target == 'region':
             if i == j:
                 continue
             adjacency.iloc[i, j] = nuts_shape.intersects(shapes[j])
+            adjacency.iloc[j, i] = shapes[j].intersects(nuts_shape)
             # TODO: what about the inverse?
 
     print(adjacency, file=sys.stderr)
@@ -232,6 +233,7 @@ if args.geo:
 
 # collect total vocab
 counts = defaultdict(lambda: defaultdict(lambda: 1))
+support = defaultdict(int)
 
 if args.trustpilot:
     print("\nProcessing Trustpilot", file=sys.stderr)
@@ -262,6 +264,9 @@ if args.trustpilot:
                 # exclude empty reviews
                 if body:
                     for text in body:
+                        # increase support for this region
+                        support[target] += 1
+
                         text = re.sub(numbers, '0', text)
                         text = re.sub(urls, '', text)
                         text = re.sub(r'\n', ' ', text)
@@ -289,7 +294,8 @@ if args.trustpilot:
                         review_frequency.update(set(words))
 
                         if args.bigrams:
-                            bigrams = [' '.join(bigram) for bigram in nltk.bigrams(words) if ' '.join(bigram).strip() is not '']
+                            bigrams = [' '.join(bigram) for bigram in nltk.bigrams(words) if
+                                       ' '.join(bigram).strip() is not '']
                             for bigram in bigrams:
                                 counts[bigram][target] += 1
                                 if args.stem:
@@ -367,16 +373,19 @@ if args.twitter:
                     except NotImplementedError:
                         pass
 
-                user_regions = [(bisect.bisect(country_lats, float('%.3f' % user_lat)), bisect.bisect(country_lngs, float('%.3f' % user_lng))) for (user_lat, user_lng) in
+                user_regions = [(bisect.bisect(country_lats, float('%.3f' % user_lat)),
+                                 bisect.bisect(country_lngs, float('%.3f' % user_lng))) for (user_lat, user_lng) in
                                 user_regions]
 
             if body:
+                # increase support for this region
+                support[target] += 1
+
                 text = re.sub(numbers, '0', body)
                 text = re.sub(r'\n', ' ', text)
                 text = re.sub(names, '', text)
                 text = re.sub(urls, '', text)
 
-                # TODO: better stopword filter
                 org_words = (' '.join([' '.join(word_tokenizer.tokenize(x)) for x in
                                        sentence_tokenizer.tokenize(text)])).split()
                 org_words = [word for word in org_words if word.lower() not in stops and len(word) > 1]
@@ -416,18 +425,27 @@ if args.twitter:
             # print(ke, file=sys.stderr)
             continue
 
+
+#==========================================================
+# split here:
+# save counts and support
+
 # filter out nouns
 if args.nounfilter:
     non_nouns = set([w for w, c in counts.items() if noun_propensity[w] / sum(c.values()) < args.nounfilter])
     counts = {word: counts[word] for word in non_nouns}
 print('Total vocab size: %s' % len(counts), file=sys.stderr)
 
-
 # throw out words seen less than N times
 totals = Counter(dict(((k, sum(v.values())) for k, v in counts.items())))
 # get top N words
 top_N = [i[0] for i in takewhile(lambda f: f[1] > args.N, totals.most_common())]
 
+# reset topN word count for all regions that have not enough support to 1
+for target in regions:
+    if support[target] > args.min_support:
+        for word in top_N:
+            counts[word][target] = 1
 
 # idf transformation before normalization
 if args.idf:
@@ -443,7 +461,6 @@ if args.idf:
         for target in region_names:
             counts[word][target] *= idf
 
-
 print('Vocab size with at least %s occurrences: %s' % (args.N, len(top_N)), file=sys.stderr)
 print(top_N[:50])
 
@@ -455,9 +472,8 @@ if args.stem:
     stem_file.close()
     print('done', file=sys.stderr)
 
-print('Computing distribution...', file=sys.stderr)
-
 # compute vocab distro per region
+print('Computing distribution...', file=sys.stderr)
 distros = []
 for target in regions:
     frequencies = np.array([counts[word][target] for word in top_N])
@@ -527,12 +543,10 @@ print('%s' % (k), file=sys.stderr)
 if args.geo:
     print('\nDistances in km:\n', D.to_latex(float_format=lambda x: '%.2f' % x), file=sys.stderr)
 
-
 Y = L
 if args.geo:
     Y = D
     print('\nmulitplied:\n', Y)
-
 
 # compute clusters over K
 print('Computing clusters...', file=sys.stderr)
