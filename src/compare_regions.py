@@ -88,8 +88,8 @@ parser.add_argument('--geo', help='use geographic distance', action='store_true'
 parser.add_argument('--idf', help='weigh vocabulary terms by IDF', choices=['docs', 'regions'], default=None)
 parser.add_argument('--limit', help='max instances', type=int, default=None)
 parser.add_argument('--linkage', help='linkage for clustering', choices=['complete', 'ward', 'average'],
-                    default='complete')
-parser.add_argument('--min_support', help='minimum documents for a region to be counted', type=int, default=100)
+                    default='ward')
+parser.add_argument('--min_support', help='minimum documents for a region to be counted', type=int, default=10)
 parser.add_argument('--nounfilter',
                     help='filter out words that are uppercase at least N% of cases in non-initial contexts (1.0=include all, 0.0=allow no uppercase whatsoever)',
                     default=1.0, type=float)
@@ -117,7 +117,7 @@ if args.stopwords:
 else:
     stops = set()
 
-info = [args.country, 'min%s' % args.N, 'NUTS-%s' % args.nuts_level, args.distance, args.target]
+info = [args.country, 'min-freq%s' % args.N, args.distance, args.target, 'min-support%s' % args.min_support]
 if args.trustpilot:
     info.append('Trustpilot')
 if args.twitter:
@@ -136,6 +136,8 @@ if args.stopwords:
     info.append('stopword-filtered')
 if args.target == 'coords':
     info.append('%s-neighbors.size-%s' % (args.num_neighbors, args.coord_size))
+else:
+    info.append('NUTS-%s' % args.nuts_level)
 
 regions = []
 region_centers = {}
