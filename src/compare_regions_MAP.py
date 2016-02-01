@@ -5,18 +5,13 @@ import json
 import re
 import sys
 import fiona
-import matplotlib.pyplot as plt
 import nltk.data
 import numpy as np
 import pandas as pd
 import seaborn as sns
 from nltk.stem import SnowballStemmer
 from nltk.tokenize import WordPunctTokenizer
-from numba import jit
-from numpy.linalg import norm
-from scipy.stats import entropy
 from shapely.geometry import shape, Point, Polygon
-from sklearn.cluster import AgglomerativeClustering
 from collections import defaultdict, Counter
 from itertools import islice, takewhile
 from math import radians, cos
@@ -42,23 +37,6 @@ country_boxes = {
     'uk': [49.5, 61., -11., 2.]
 }
 
-
-def laskers(x, y):
-    return -np.log2(x.dot(y))
-
-
-def kl(x, y):
-    return entropy(x, y)
-
-
-@jit
-def js(P, Q):
-    _P = P / norm(P, ord=1)
-    _Q = Q / norm(Q, ord=1)
-    _M = 0.5 * (_P + _Q)
-    return 0.5 * (entropy(_P, _M) + entropy(_Q, _M))
-
-
 def get_shortest_in(needle, haystack):
     '''
 
@@ -75,40 +53,27 @@ def get_shortest_in(needle, haystack):
     return d.tolist()
 
 
-parser = argparse.ArgumentParser(description="compare regions")
+parser = argparse.ArgumentParser(description="collect data to compare regions")
 parser.add_argument('--trustpilot', help='input file')
 parser.add_argument('--twitter', help='input file')
 parser.add_argument('--bigrams', help='use bigrams', action="store_true")
-parser.add_argument('--clusters', help='number of clusters, can be CSV', type=str, default=None)
 parser.add_argument('--coord_size', help='size of coordinate grid in degrees', default=0.1, type=float)
-parser.add_argument('--country', choices=['denmark', 'germany', 'france', 'uk'], help='which country to use',
-                    default='denmark')
-parser.add_argument('--distance', choices=['kl', 'laskers', 'js'], help='similarity function on vocab', default='js')
+parser.add_argument('--country', choices=['denmark', 'germany', 'france', 'uk', 'eu'], help='which country to use',
+                    default='eu')
 parser.add_argument('--geo', help='use geographic distance', action='store_true', default=False)
-parser.add_argument('--idf', help='weigh vocabulary terms by IDF', choices=['docs', 'regions'], default=None)
 parser.add_argument('--limit', help='max instances', type=int, default=None)
-parser.add_argument('--linkage', help='linkage for clustering', choices=['complete', 'ward', 'average'],
-                    default='ward')
-parser.add_argument('--min_support', help='minimum documents for a region to be counted', type=int, default=10)
-parser.add_argument('--nounfilter',
-                    help='filter out words that are uppercase at least N% of cases in non-initial contexts (1.0=include all, 0.0=allow no uppercase whatsoever)',
-                    default=1.0, type=float)
-parser.add_argument('--num_neighbors', help='number of neighbors in coordinate grid', default=5, type=int)
 parser.add_argument('--nuts', help='NUTS regions shape file',
                     default="/Users/dirkhovy/working/lowlands/GeoStats/data/nuts/NUTS_RG_03M_2010.shp")
 parser.add_argument('--nuts_level', help='NUTS level', type=int, default=2)
-parser.add_argument('--N', help='minimum occurrence of words', type=int, default=10)
 parser.add_argument('--prefix', help='output prefix', type=str, default='output')
-parser.add_argument('--show', help='show dendrogram', action='store_true', default=False)
 parser.add_argument('--stem', help='stem words', action='store_true', default=False)
 parser.add_argument('--stopwords', help='stopwords', type=str)
 parser.add_argument('--target', choices=['region', 'gender', 'coords'], help='target variable', default='region')
 
 args = parser.parse_args()
 
-distances = {'kl': kl, 'laskers': laskers, 'js': js}
-country2lang = {'denmark': 'danish', 'germany': 'german', 'france': 'french', 'uk': 'english'}
-country2nuts = {'denmark': 'DK', 'germany': 'DE', 'france': 'FR', 'uk': 'UK'}
+country2lang = {'denmark': 'danish', 'germany': 'german', 'france': 'french', 'uk': 'english', 'eu':None}
+country2nuts = {'denmark': 'DK', 'germany': 'DE', 'france': 'FR', 'uk': 'UK', 'eu':None}
 country_lats = np.arange(country_boxes[args.country][0], country_boxes[args.country][1], args.coord_size)
 country_lngs = np.arange(country_boxes[args.country][2], country_boxes[args.country][3], args.coord_size)
 
@@ -117,21 +82,15 @@ if args.stopwords:
 else:
     stops = set()
 
-info = [args.country, 'min-freq%s' % args.N, args.distance, args.target, 'min-support%s' % args.min_support]
+info = [args.country, args.target]
 if args.trustpilot:
     info.append('Trustpilot')
 if args.twitter:
     info.append('Twitter')
 if args.bigrams:
     info.append('bigrams')
-if args.idf:
-    info.append('IDF-%s' % args.idf)
 if args.stem:
     info.append('stemmed')
-if args.geo:
-    info.append('geo-distance')
-if args.nounfilter:
-    info.append('nouns-filtered')
 if args.stopwords:
     info.append('stopword-filtered')
 if args.target == 'coords':
@@ -146,6 +105,9 @@ word_tokenizer = WordPunctTokenizer()
 sentence_tokenizer = nltk.data.load('tokenizers/punkt/%s.pickle' % (country2lang[args.country]))
 stemmer = SnowballStemmer(country2lang[args.country])
 
+review_frequency = Counter()
+counts = defaultdict(lambda: defaultdict(lambda: 1))
+support = defaultdict(int)
 inverted_stems = defaultdict(set)
 noun_propensity = defaultdict(int)
 
@@ -168,9 +130,9 @@ if args.target == 'region':
 
     regions = sorted(regions)
     print("%s regions" % len(regions))
+    adjacency = pd.DataFrame(False, index=regions, columns=regions)
 
     print("computing adjacency...", file=sys.stderr)
-    adjacency = pd.DataFrame(False, index=regions, columns=regions)
     for i in range(len(shapes)):
         nuts_shape = shapes[i].buffer(0.1)
         for j in range(len(shapes)):
@@ -180,7 +142,6 @@ if args.target == 'region':
             adjacency.iloc[j, i] = shapes[j].intersects(nuts_shape)
             # TODO: what about the inverse?
 
-    print(adjacency, file=sys.stderr)
 
 # geo-coordinates are 0.1 increments of lat-lng pairs, based on the country's bounding box
 elif args.target == 'coords':
@@ -191,9 +152,9 @@ elif args.target == 'coords':
         for lng in range(num_lngs):
             regions.append((lat, lng))
     print("%s regions" % len(regions))
+    adjacency = pd.DataFrame(False, index=regions, columns=regions)
 
     print("computing adjacency...", file=sys.stderr)
-    adjacency = pd.DataFrame(False, index=regions, columns=regions)
     regions_set = set(regions)
     covered = set()
     num_neighbors = args.num_neighbors
@@ -206,13 +167,11 @@ elif args.target == 'coords':
                 if neighbor in regions_set and neighbor != (i, j):
                     adjacency.ix[(i, j), neighbor] = True
                     adjacency.ix[neighbor, (i, j)] = True
-    print(adjacency, file=sys.stderr)
 
 else:
     regions = ['F', 'M']
 
 region_name2int = dict([(name, i) for (i, name) in enumerate(regions)])
-review_frequency = Counter()
 
 # compute matrix D, distances between regions
 if args.geo:
@@ -233,11 +192,10 @@ if args.geo:
                 x = get_shortest_in(lat_lng1, lat_lng2)[0]
                 D.ix[lat_lng1, lat_lng2] = x
                 D.ix[lat_lng2, lat_lng1] = x
+else:
+    D = None
 
 # collect total vocab
-counts = defaultdict(lambda: defaultdict(lambda: 1))
-support = defaultdict(int)
-
 if args.trustpilot:
     print("\nProcessing Trustpilot", file=sys.stderr)
     for line_no, line in enumerate(islice(open(args.trustpilot), None)):
@@ -265,7 +223,6 @@ if args.trustpilot:
             for review in reviews:
                 body = review.get('text', None)
                 # exclude empty reviews
-
                 if body:
                     for text in body:
                         # increase support for this region
@@ -417,8 +374,7 @@ if args.twitter:
                 if args.bigrams:
                     bigrams = [' '.join(bigram) for bigram in nltk.bigrams(words) if ' '.join(bigram).strip() is not '']
                     for bigram in bigrams:
-                        for target in user_regions:
-                            counts[bigram][target] += 1
+                        counts[bigram][target] += 1
                         if args.stem:
                             inverted_stems[bigram].add(bigram)
                     review_frequency.update(set(bigrams))
@@ -433,165 +389,32 @@ if args.twitter:
 
 
 #==========================================================
-# split here:
-# save counts and support
-print("smallest observed support for regions: %s" % (min(support.values())), file=sys.stderr)
-
-# filter out nouns
-if args.nounfilter:
-    non_nouns = set([w for w, c in counts.items() if noun_propensity[w] / sum(c.values()) < args.nounfilter])
-    counts = {word: counts[word] for word in non_nouns}
-print('Total vocab size: %s' % len(counts), file=sys.stderr)
-
-# throw out words seen less than N times
-totals = Counter(dict(((k, sum(v.values())) for k, v in counts.items())))
-# get top N words
-top_N = [i[0] for i in takewhile(lambda f: f[1] > args.N, totals.most_common())]
-
-# reset topN word count for all regions that have not enough support to 1
-for target in regions:
-    if support[target] > args.min_support:
-        for word in top_N:
-            counts[word][target] = 1
-
-# idf transformation before normalization
-if args.idf:
-    total_D = sum(review_frequency.values())
-    for word, region_names in counts.items():
-        # normalize by the number of documents it occurred in
-        if args.idf == 'docs':
-            idf = np.log(total_D / (1 + review_frequency[word]))
-        # normalize by the number of regions it occurred in
-        else:
-            idf = np.log(total_D / (1 + len(counts[word].keys())))
-
-        for target in region_names:
-            counts[word][target] *= idf
-
-print('Vocab size with at least %s occurrences: %s' % (args.N, len(top_N)), file=sys.stderr)
-print(top_N[:50])
+# save counts
 
 if args.stem:
+    stem_file_name = '%s.%s.inverted_stems.tsv' % (args.prefix, '.'.join(info))
     print('Writing stem indices...', file=sys.stderr)
-    stem_file = open('%s%s.inverted_stems.tsv' % (args.prefix, '.'.join(info)), 'w')
+    stem_file = open(stem_file_name, 'w')
     for stem, words in inverted_stems.items():
         stem_file.write("%s\t%s\n" % (stem, ', '.join(words)))
     stem_file.close()
     print('done', file=sys.stderr)
+else:
+    stem_file_name = None
 
-# compute vocab distro per region
-print('Computing distribution...', file=sys.stderr)
-distros = []
-for target in regions:
-    frequencies = np.array([counts[word][target] for word in top_N])
-    distro = frequencies / frequencies.sum()
-    distros.append(distro)
+model = {"counts": counts,
+    "noun_propensity": noun_propensity,
+    "review_frequency": review_frequency,
+    "regions": regions,
+    "support": support,
+    "adjacency": adjacency.values.tolist(),
+    "inverted_stems": stem_file_name,
+    "info": info,
+    "D": D,# probably obsolete, now that we have neighborhood adjacency
+    "region_name2int": region_name2int
+     }
 
-# 2 stats
-all_distros = np.array(distros)
-row_indices = list(range(len(distros)))
-
-print('Computing region differences...', file=sys.stderr)
-g2_file = open('%s%s.G2-regions.tsv' % (args.prefix, '.'.join(info)), 'w')
-for i, row in enumerate(all_distros):
-    rest_indices = row_indices.copy()
-    rest_indices.remove(i)
-    m = all_distros[rest_indices].mean(axis=0)
-    g2 = np.log(row / m)
-    top_vocab = g2.argsort()[-50:]
-
-    if args.stem:
-        g2_file.write("%s\n\n" % '\n'.join('%s\t%s\t%s' % (regions[i], w, g) for (w, g) in
-                                           reversed(list(zip([min(inverted_stems[top_N[x]]) for x in top_vocab],
-                                                             [g2[x] for x in top_vocab])))))
-
-    else:
-        g2_file.write("%s\n\n" % '\n'.join('%s\t%s\t%s' % (regions[i], w, g) for (w, g) in
-                                           reversed(
-                                               list(zip([top_N[x] for x in top_vocab], [g2[x] for x in top_vocab])))))
-
-g2_file.close()
-
-# compute matrix L, distance between regions based on vocab distros
-print('Computing linguistic distances:', file=sys.stderr)
-distance_function = distances[args.distance]
-L = pd.DataFrame(0.0, index=regions, columns=regions)
-k = 0
-# max_computations = int(len(regions) * ((args.num_neighbors*2+1)**2)
-for i, x in enumerate(distros):
-    r1 = regions[i]
-
-    r1_neighbors = set(adjacency[r1][adjacency[r1] == True].index.tolist())
-
-    for j, y in enumerate(distros[i:]):
-
-        r2 = regions[i + j]
-
-        if r2 not in r1_neighbors:
-            continue
-
-        k += 1
-        if k > 0:
-            if k % 5000 == 0:
-                print('%s' % (k), file=sys.stderr)
-            elif k % 100 == 0:
-                print('.', file=sys.stderr, end='')
-
-        if args.distance == 'js':
-            distance = js(x, y)
-            L.ix[r1, r2] = distance
-            L.ix[r2, r1] = distance
-        else:
-            L.ix[r1, r2] = distance_function(x, y)
-            L.ix[r2, r1] = distance_function(y, x)
-
-print('%s' % (k), file=sys.stderr)
-
-if args.geo:
-    print('\nDistances in km:\n', D.to_latex(float_format=lambda x: '%.2f' % x), file=sys.stderr)
-
-Y = L
-if args.geo:
-    Y = D
-    print('\nmulitplied:\n', Y)
-
-# compute clusters over K
-print('Computing clusters...', file=sys.stderr)
-if args.clusters:
-    for num_c in map(int, args.clusters.split(',')):
-
-        clustering = AgglomerativeClustering(linkage=args.linkage, n_clusters=num_c, connectivity=adjacency)
-        cluster_names = clustering.fit_predict(Y, adjacency)
-        # region2cluster = list(zip(regions, hierarchy.fcluster(row_linkage, num_c, criterion='maxclust')))
-        region2cluster = list(zip(regions, cluster_names))
-
-        cluster_file = open('%s%s.%sclusters.tsv' % (args.prefix, '.'.join(info), num_c), 'w')
-        cluster_file.write('%s\n' % '\n'.join(('%s\t%s' % (r, clusters) for (r, clusters) in region2cluster)))
-        cluster_file.close()
-
-        g2_file = open('%s%s.G2-clusters.%sclusters.tsv' % (args.prefix, '.'.join(info), num_c), 'w')
-
-        for i in range(0, num_c):
-            in_cluster = [region_name2int[r] for r, c in region2cluster if c == i]
-            rest_indices = row_indices.copy()
-            for j in in_cluster:
-                rest_indices.remove(j)
-
-            mean_rest = all_distros[rest_indices].mean(axis=0)
-            mean_in = all_distros[in_cluster].mean(axis=0)
-
-            g2 = np.log(mean_in / mean_rest)
-            top_vocab = g2.argsort()[-50:]
-            g2_file.write('Cluster %s: %s\n' % (i, ', '.join([str(regions[x]) for x in in_cluster])))
-            if args.stem:
-                g2_file.write("%s\n\n" % '\n'.join('\t%s\t%s' % (w, g) for (w, g) in reversed(
-                    list(zip([min(inverted_stems[top_N[x]]) for x in top_vocab], [g2[x] for x in top_vocab])))))
-            else:
-                g2_file.write("%s\n\n" % '\n'.join('\t%s\t%s' % (w, g) for (w, g) in reversed(
-                    list(zip([top_N[x] for x in top_vocab], [g2[x] for x in top_vocab])))))
-
-        g2_file.close()
-
-# plot clusters on map
-if args.show:
-    plt.show()
+print('Saving model to "%s.%s.json"' % (args.prefix, '.'.join(info)), file=sys.stderr)
+with open("%s.%s.json" % (args.prefix, '.'.join(info)), "w") as jmodel:
+    json.dump(model, jmodel)
+print('done', file=sys.stderr)
