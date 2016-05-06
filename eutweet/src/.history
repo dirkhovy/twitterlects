@@ -45,3 +45,9 @@
 2016-05-06.14-04-15.c252.hum-nfi.sc.ku.dk python compute_adjacency.py --coord_size 0.2
 2016-05-06.14-14-21.c252.hum-nfi.sc.ku.dk python compute_adjacency.py --coord_size 0.2
 2016-05-06.14-18-33.c252.hum-nfi.sc.ku.dk python compute_adjacency.py --coord_size 0.2
+2016-05-06.14-42-59.c252.hum-nfi.sc.ku.dk ls
+2016-05-06.14-43-06.c252.hum-nfi.sc.ku.dk git em eu-0.*
+2016-05-06.14-43-12.c252.hum-nfi.sc.ku.dk git rm eu-0.*
+2016-05-06.14-43-14.c252.hum-nfi.sc.ku.dk ls
+2016-05-06.14-43-20.c252.hum-nfi.sc.ku.dk git rm output.eu.coords.5-neighbors.size-0.1.*
+2016-05-06.14-43-36.c252.hum-nfi.sc.ku.dk git rm output.eu.coords.5-neighbors.size-0.1.*
