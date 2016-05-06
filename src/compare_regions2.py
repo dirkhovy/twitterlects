@@ -19,9 +19,12 @@ from scipy.stats import entropy
 from shapely.geometry import shape, Point, Polygon
 from sklearn.cluster import AgglomerativeClustering
 from collections import defaultdict, Counter
-from itertools import islice, takewhile
+from itertools import islice
 from math import radians, cos
 from nltk.corpus import stopwords
+from itertools import count
+from scipy import sparse
+from sklearn.preprocessing import normalize
 
 sns.set(font="monospace")
 sns.set_context('poster')
@@ -81,6 +84,7 @@ parser = argparse.ArgumentParser(description="compare regions")
 parser.add_argument('--trustpilot', help='input file')
 parser.add_argument('--twitter', help='input file')
 parser.add_argument('--bigrams', help='use bigrams', action="store_true")
+parser.add_argument('--chars', help='use character n-grams', action="store_true")
 parser.add_argument('--clusters', help='number of clusters, can be CSV', type=str, default=None)
 parser.add_argument('--coord_size', help='size of coordinate grid in degrees', default=0.1, type=float)
 parser.add_argument('--country', choices=['denmark', 'germany', 'france', 'uk'], help='which country to use',
@@ -101,6 +105,8 @@ parser.add_argument('--nuts', help='NUTS regions shape file',
 parser.add_argument('--nuts_level', help='NUTS level', type=int, default=2)
 parser.add_argument('--N', help='minimum occurrence of words', type=int, default=10)
 parser.add_argument('--prefix', help='output prefix', type=str, default='output')
+parser.add_argument('--random', help='permute count matrix at random (for comparison reasons only)',
+                    action='store_true', default=False)
 parser.add_argument('--show', help='show dendrogram', action='store_true', default=False)
 parser.add_argument('--stem', help='stem words', action='store_true', default=False)
 parser.add_argument('--stopwords', help='stopwords', type=str)
@@ -113,6 +119,13 @@ country2lang = {'denmark': 'danish', 'germany': 'german', 'france': 'french', 'u
 country2nuts = {'denmark': 'DK', 'germany': 'DE', 'france': 'FR', 'uk': 'UK'}
 country_lats = np.arange(country_boxes[args.country][0], country_boxes[args.country][1], args.coord_size)
 country_lngs = np.arange(country_boxes[args.country][2], country_boxes[args.country][3], args.coord_size)
+
+rows = []
+cols = []
+values = []
+
+word2int_count = count()
+word2int = defaultdict(word2int_count.__next__)
 
 if args.stopwords:
     stops = set(stopwords.words(args.stopwords))
@@ -169,7 +182,7 @@ if args.target == 'region':
                 region_centers[nuts_id] = list(nuts_shape.centroid.coords)[0]
 
     regions = sorted(regions)
-    print("%s regions" % len(regions))
+    print("%s regions" % len(regions), file=sys.stderr, flush=True)
 
     print("computing adjacency...", file=sys.stderr, flush=True)
     adjacency = pd.DataFrame(False, index=regions, columns=regions)
@@ -192,17 +205,21 @@ elif args.target == 'coords':
     for lat in range(num_lats):
         for lng in range(num_lngs):
             regions.append((lat, lng))
-    print("%s regions" % len(regions))
+    print("%s regions" % len(regions), file=sys.stderr, flush=True)
 
     m = Basemap(llcrnrlat=country_boxes[args.country][0],
-            urcrnrlat=country_boxes[args.country][1],
-            llcrnrlon=country_boxes[args.country][2],
-            urcrnrlon=country_boxes[args.country][3],
-            resolution='l', projection='merc')
+                urcrnrlat=country_boxes[args.country][1],
+                llcrnrlon=country_boxes[args.country][2],
+                urcrnrlon=country_boxes[args.country][3],
+                resolution='l', projection='merc')
 
     lon_bins_2d, lat_bins_2d = np.meshgrid(country_lngs, country_lats)
 
     country_lngs_m, country_lats_m = m(lon_bins_2d, lat_bins_2d)
+
+    # try:
+    #     adjacency = pd.from_csv('%s-%s.adjacency.csv' % (args.country, args.coord_size))
+    #
 
     print("computing adjacency...", file=sys.stderr, flush=True)
     adjacency = pd.DataFrame(False, index=regions, columns=regions)
@@ -210,31 +227,36 @@ elif args.target == 'coords':
     land_regions = set()
     covered = set()
     num_neighbors = args.num_neighbors
+    start = time.time()
     for i in range(num_lats):
         for j in range(num_lngs):
             neighbors = [(i + lat_iterator, j + lng_iterator) for lat_iterator in
                          list(range(-num_neighbors, num_neighbors + 1)) for lng_iterator in
                          list(range(-num_neighbors, num_neighbors + 1))]
             for (n1, n2) in neighbors:
+                if tuple(sorted(((i, j), (n1, n2)))) in covered:
+                    continue
                 if (n1, n2) in regions_set and \
                                 (n1, n2) != (i, j) and \
                                 n1 >= 0 and n2 >= 0 and \
+                                n1 < num_lats and n2 < num_lngs and \
                         m.is_land(country_lngs_m[n1, n2], country_lats_m[n1, n2]):
                     adjacency.ix[(i, j), (n1, n2)] = True
                     adjacency.ix[(n1, n2), (i, j)] = True
                     land_regions.add((n1, n2))
+                    covered.add(tuple(sorted(((i, j), (n1, n2)))))
 
-    land_regions = list(land_regions)
-    print("done", file=sys.stderr, flush=True)
+    # land_regions = list(land_regions)
+    print('done in %.2f sec' % (time.time() - start), file=sys.stderr, flush=True)
+    adjacency.to_csv('%s-%s.adjacency.csv' % (args.country, args.coord_size))
     print('%s land regions (out of %s)' % (len(land_regions), len(regions)), file=sys.stderr, flush=True)
 
 else:
     regions = ['F', 'M']
 
 region_name2int = dict([(name, i) for (i, name) in enumerate(regions)])
-land_region_name2int = dict([(name, i) for (i, name) in enumerate(land_regions)])
+# land_region_name2int = dict([(name, i) for (i, name) in enumerate(land_regions)])
 review_frequency = Counter()
-
 
 # compute matrix D, distances between regions
 if args.geo:
@@ -257,8 +279,8 @@ if args.geo:
                 D.ix[lat_lng2, lat_lng1] = x
 
 # collect total vocab
-counts = defaultdict(lambda: defaultdict(lambda: 1))
 support = defaultdict(int)
+start = time.time()
 
 if args.trustpilot:
     print("\nProcessing Trustpilot", file=sys.stderr, flush=True)
@@ -284,6 +306,8 @@ if args.trustpilot:
             else:
                 target = user.get('gender', None)
 
+            target = region_name2int[target]
+
             for review in reviews:
                 body = review.get('text', None)
                 # exclude empty reviews
@@ -297,36 +321,58 @@ if args.trustpilot:
                         text = re.sub(urls, '', text)
                         text = re.sub(r'\n', ' ', text)
 
-                        org_words = (' '.join([' '.join(word_tokenizer.tokenize(x)) for x in
-                                               sentence_tokenizer.tokenize(text)])).split()
-                        org_words = [word for word in org_words if word.lower() not in stops and len(word) > 1]
-                        words_lower = [word.lower() for word in org_words]
+                        # use characters only
+                        if args.chars:
+                            text = "S" + text.lower() + "E"
 
-                        if args.stem:
-                            stemmed_words = list(map(stemmer.stem, org_words))
-                            # update inverted index
-                            for stem, word in zip(stemmed_words, words_lower):
-                                inverted_stems[stem].add(word)
+                            for n in range(2, 7):
+                                for chargram in [word2int[text[i:i+n]] for i in range(len(text)-n+1)]:
+                                    rows.append(target)
+                                    cols.append(chargram)
+                                    values.append(1)
 
-                            words = list(filter(lambda word: word != '', stemmed_words))
+                        # use your words...
                         else:
-                            words = org_words
+                            org_words = (' '.join([' '.join(word_tokenizer.tokenize(x)) for x in
+                                                   sentence_tokenizer.tokenize(text)])).split()
+                            org_words = [word for word in org_words if word.lower() not in stops and len(word) > 1]
+                            words_lower = [word.lower() for word in org_words]
 
-                        for w, word in enumerate(words):
-                            if org_words[w][0].isupper():
-                                noun_propensity[word] += 1
+                            if args.stem:
+                                stemmed_words = list(map(stemmer.stem, org_words))
+                                # update inverted index
+                                for stem, word in zip(stemmed_words, words_lower):
+                                    inverted_stems[stem].add(word)
 
-                            counts[word][target] += 1
-                        review_frequency.update(set(words))
+                                words = list(filter(lambda word: word != '', stemmed_words))
+                            else:
+                                words = org_words
 
-                        if args.bigrams:
-                            bigrams = [' '.join(bigram) for bigram in nltk.bigrams(words) if
-                                       ' '.join(bigram).strip() is not '']
-                            for bigram in bigrams:
-                                counts[bigram][target] += 1
+                            wids = [word2int[word] for word in words]
+                            for w, wid in enumerate(wids):
+                                if org_words[w][0].isupper():
+                                    noun_propensity[wid] += 1
+
+                                rows.append(target)
+                                cols.append(wid)
+                                values.append(1)
+                                # counts[word][target] += 1
+                            review_frequency.update(set(wids))
+
+                            if args.bigrams:
+                                bigrams = [' '.join(bigram) for bigram in nltk.bigrams(words) if
+                                           ' '.join(bigram).strip() is not '']
                                 if args.stem:
-                                    inverted_stems[bigram].add(bigram)
-                            review_frequency.update(set(bigrams))
+                                    for bigram in bigrams:
+                                        inverted_stems[bigram].add(bigram)
+
+                                wids = [word2int[word] for word in bigrams]
+                                for bigram in wids:
+                                    rows.append(target)
+                                    cols.append(wid)
+                                    values.append(1)
+                                    # counts[bigram][target] += 1
+                                review_frequency.update(set(wids))
 
 
         except ValueError:
@@ -379,8 +425,8 @@ if args.twitter:
             except KeyError:
                 pass
 
-            if 'da' not in languages and 'no' not in languages:
-                continue
+            # if 'da' not in languages and 'no' not in languages:
+            #     continue
 
             if args.target == 'region':
                 user_regions = user['actor']['NUTS%s' % args.nuts_level]['region']
@@ -389,7 +435,7 @@ if args.twitter:
                 user_regions = []
                 try:
                     # lat, lng
-                    user_regions = [tuple(user['geo']['coordinates'])]
+                    user_regions = [region_name2int[tuple(user['geo']['coordinates'])]]
                 except KeyError:
                     try:
                         coords = list(Point(Polygon(user['location']['geo']['coordinates'][0]).centroid).coords)[0]
@@ -399,9 +445,16 @@ if args.twitter:
                     except NotImplementedError:
                         pass
 
-                user_regions = [(bisect.bisect(country_lats, float('%.3f' % user_lat)),
-                                 bisect.bisect(country_lngs, float('%.3f' % user_lng))) for (user_lat, user_lng) in
-                                user_regions]
+                # TODO: fix problem here:
+                # TypeError: 'int' object is not iterable in <listcomp>
+                try:
+                    user_regions = [region_name2int[(bisect.bisect(country_lats, float('%.3f' % user_lat)),
+                                                     bisect.bisect(country_lngs, float('%.3f' % user_lng)))] for
+                                    (user_lat, user_lng) in
+                                    user_regions]
+                except TypeError:
+                    continue
+                    print("Can't translate regions:", user_regions, file=sys.stderr, flush=True)
 
             if body:
                 # increase support for this region
@@ -413,37 +466,54 @@ if args.twitter:
                 text = re.sub(names, '', text)
                 text = re.sub(urls, '', text)
 
-                org_words = (' '.join([' '.join(word_tokenizer.tokenize(x)) for x in
-                                       sentence_tokenizer.tokenize(text)])).split()
-                org_words = [word for word in org_words if word.lower() not in stops and len(word) > 1]
+                if args.chars:
+                    text = "S" + text.lower() + "E"
+                    for n in range(2, 7):
+                        for chargram in [word2int[text[i:i+n]] for i in range(len(text)-n+1)]:
+                            rows.append(target)
+                            cols.append(chargram)
+                            values.append(1)
 
-                words_lower = list(map(str.lower, org_words))
-
-                if args.stem:
-                    stemmed_words = list(map(stemmer.stem, org_words))
-                    # update inverted index
-                    for stem, word in zip(stemmed_words, words_lower):
-                        inverted_stems[stem].add(word)
-
-                    words = list(filter(lambda word: word != '', stemmed_words))
+                # use your words
                 else:
-                    words = org_words
+                    org_words = (' '.join([' '.join(word_tokenizer.tokenize(x)) for x in
+                                           sentence_tokenizer.tokenize(text)])).split()
+                    org_words = [word for word in org_words if word.lower() not in stops and len(word) > 1]
 
-                for w, word in enumerate(words):
-                    if w > 0 and org_words[w][0].isupper() and not org_words[w].isupper():
-                        noun_propensity[word] += 1
-                    for target in user_regions:
-                        counts[word][target] += 1
-                review_frequency.update(set(words))
+                    words_lower = list(map(str.lower, org_words))
 
-                if args.bigrams:
-                    bigrams = [' '.join(bigram) for bigram in nltk.bigrams(words) if ' '.join(bigram).strip() is not '']
-                    for bigram in bigrams:
+                    if args.stem:
+                        stemmed_words = list(map(stemmer.stem, org_words))
+                        # update inverted index
+                        for stem, word in zip(stemmed_words, words_lower):
+                            inverted_stems[stem].add(word)
+
+                        words = list(filter(lambda word: word != '', stemmed_words))
+                    else:
+                        words = org_words
+
+                    wids = [word2int[word] for word in words]
+                    for w, wid in enumerate(wids):
+                        if w > 0 and org_words[w][0].isupper() and not org_words[w].isupper():
+                            noun_propensity[wid] += 1
                         for target in user_regions:
-                            counts[bigram][target] += 1
+                            rows.append(target)
+                            cols.append(wid)
+                            values.append(1)
+                    review_frequency.update(set(wids))
+
+                    if args.bigrams:
+                        bigrams = [' '.join(bigram) for bigram in nltk.bigrams(words) if ' '.join(bigram).strip() is not '']
                         if args.stem:
-                            inverted_stems[bigram].add(bigram)
-                    review_frequency.update(set(bigrams))
+                            for bigram in bigrams:
+                                inverted_stems[bigram].add(bigram)
+                        bigrams = [word2int[word] for word in bigrams]
+                        for bigram in bigrams:
+                            for target in user_regions:
+                                rows.append(target)
+                                cols.append(wid)
+                                values.append(1)
+                        review_frequency.update(set(bigrams))
 
 
         except ValueError as ve:
@@ -453,97 +523,73 @@ if args.twitter:
             # print(ke, file=sys.stderr, flush=True)
             continue
 
+print('done in %.2f sec' % (time.time() - start), file=sys.stderr, flush=True)
 
-#==========================================================
+print("\ncreating sparse count matrix", file=sys.stderr, flush=True)
+counts = sparse.coo_matrix((values, (rows, cols)), dtype=np.float, shape=(len(regions), len(word2int))).tocsr()
+num_inst, num_feats = counts.shape
+print("\n%s regions, %s features" % (num_inst, num_feats), file=sys.stderr, flush=True)
+
+# ==========================================================
 # split here:
 # save counts and support
 print("smallest observed support for regions: %s" % (min(support.values())), file=sys.stderr, flush=True)
 
 # filter out nouns
-if args.nounfilter:
-    non_nouns = set([w for w, c in counts.items() if noun_propensity[w] / sum(c.values()) < args.nounfilter])
-    counts = {word: counts[word] for word in non_nouns}
-print('Total vocab size: %s' % len(counts), file=sys.stderr, flush=True)
+# TODO: solve this for sparse matrix!!!
+# if args.nounfilter:
+#     non_nouns = set([w for w, c in counts.items() if noun_propensity[w] / sum(c.values()) < args.nounfilter])
+#     counts = {word: counts[word] for word in non_nouns}
+
+int2word = {i: word for word, i in word2int.items()}
 
 # throw out words seen less than N times
-totals = Counter(dict(((k, sum(v.values())) for k, v in counts.items())))
+totals = counts.sum(axis=0)
 # get top N words
-top_N = [i[0] for i in takewhile(lambda f: f[1] > args.N, totals.most_common())]
+# top_N = [i[0] for i in takewhile(lambda f: f[1] > args.N, totals.most_common())]
+top_N = np.argwhere(totals > args.N)[:, 1]
 print('Vocab size with at least %s occurrences: %s' % (args.N, len(top_N)), file=sys.stderr, flush=True)
-print(top_N[:50])
+counts = counts[:, top_N]
+# keep track of what the original word ID for each position in the reduced matrix was
+reduced2orgID = {i: int2word[value] for i, value in enumerate(top_N)}
+num_inst, num_feats = counts.shape
+print("\nreduced to %s words" % (num_feats), file=sys.stderr, flush=True)
+
 
 # reset topN word count for all regions that have not enough support to 1
-start = time.time()
-print('reducing unsupported regions...', file=sys.stderr, flush=True)
-for target in regions:
-    if support[target] > args.min_support:
-        for word in top_N:
-            counts[word][target] = 1
-print('done in %.2f sec' % (time.time() - start), file=sys.stderr, flush=True)
+ignore_regions = {target for target in regions if support[region_name2int[target]] < args.min_support}
+print('found %s unsupported regions (fewer than %s entries), leaving %s supported land regions...' % (len(ignore_regions), args.min_support, len(regions) - len(ignore_regions)),
+      file=sys.stderr, flush=True)
+with open('%s%s.support.tsv' % (args.prefix, '.'.join(info)), 'w') as support_file:
+    support_file.write('\n'.join(["%s\t%s" % (target, support[region_name2int[target]]) for target in regions]))
+
+
 
 # idf transformation before normalization
 if args.idf:
     start = time.time()
     print('Computing IDF values...', file=sys.stderr, flush=True)
-    total_D = sum(review_frequency.values())
-    for word, region_names in counts.items():
-        # normalize by the number of documents it occurred in
-        if args.idf == 'docs':
-            idf = np.log(total_D / (1 + review_frequency[word]))
-        # normalize by the number of regions it occurred in
-        else:
-            idf = np.log(total_D / (1 + len(counts[word].keys())))
+    if args.idf == 'docs':
+        idf = np.log(counts.sum() / (counts.sum(axis=0)))
+    # normalize by the number of regions it occurred in
+    else:
+        idf = np.log(counts.sum() / (np.bincount(counts.nonzero()[1])))
 
-        for target in region_names:
-            counts[word][target] *= idf
+    counts = counts.multiply(idf)
     print('done in %.2f sec' % (time.time() - start), file=sys.stderr, flush=True)
 
-if args.stem:
-    print('Writing stem indices...', file=sys.stderr, flush=True)
-    stem_file = open('%s%s.inverted_stems.tsv' % (args.prefix, '.'.join(info)), 'w')
-    for stem, words in inverted_stems.items():
-        stem_file.write("%s\t%s\n" % (stem, ', '.join(words)))
-    stem_file.close()
-    print('done', file=sys.stderr, flush=True)
+# permute count matrix to check whether outcome is still sensible
+if args.random:
+    counts = np.random.random((counts.shape))
+    print(
+        '\n\n****************** WARNING ******************\n*         USING RANDOM PERMUTATION          *\n*********************************************\n\n',
+        file=sys.stderr, flush=True)
+    info.append('RANDOM')
 
 # compute vocab distro per region
 start = time.time()
 print('Computing distribution...', file=sys.stderr, flush=True)
-distros = []
-# CAVE: is this really ok, or do we need to iterate over all regions?
-for t, target in enumerate(land_regions):
-    print('.', file=sys.stderr, end='', flush=True)
-    frequencies = np.array([counts[word][target] for word in top_N])
-    distro = frequencies / frequencies.sum()
-    distros.append(distro)
-print('done in %.2f sec' % (time.time() - start), file=sys.stderr, flush=True)
-
-
-# 2 stats
-all_distros = np.array(distros)
-row_indices = list(range(len(distros)))
-
-start = time.time()
-print('Computing region differences...', file=sys.stderr, flush=True)
-g2_file = open('%s%s.G2-regions.tsv' % (args.prefix, '.'.join(info)), 'w')
-for i, row in enumerate(all_distros):
-    rest_indices = row_indices.copy()
-    rest_indices.remove(i)
-    m = all_distros[rest_indices].mean(axis=0)
-    g2 = np.log(row / m)
-    top_vocab = g2.argsort()[-50:]
-
-    if args.stem:
-        g2_file.write("%s\n\n" % '\n'.join('%s\t%s\t%s' % (land_regions[i], w, g) for (w, g) in
-                                           reversed(list(zip([min(inverted_stems[top_N[x]]) for x in top_vocab],
-                                                             [g2[x] for x in top_vocab])))))
-
-    else:
-        g2_file.write("%s\n\n" % '\n'.join('%s\t%s\t%s' % (land_regions[i], w, g) for (w, g) in
-                                           reversed(
-                                               list(zip([top_N[x] for x in top_vocab], [g2[x] for x in top_vocab])))))
-
-g2_file.close()
+distros = normalize(counts, norm='l1', axis=1)
 print('done in %.2f sec' % (time.time() - start), file=sys.stderr, flush=True)
 
 # compute matrix L, distance between regions based on vocab distros
@@ -554,15 +600,17 @@ L = pd.DataFrame(0.0, index=regions, columns=regions)
 k = 0
 # max_computations = int(len(regions) * ((args.num_neighbors*2+1)**2)
 for i, x in enumerate(distros):
-    r1 = land_regions[i]
+
+    r1 = regions[i]
+    if r1 in ignore_regions or r1 not in land_regions:
+        continue
 
     r1_neighbors = set(adjacency[r1][adjacency[r1] == True].index.tolist())
 
     for j, y in enumerate(distros[i:]):
 
-        r2 = land_regions[i + j]
-
-        if r2 not in r1_neighbors:
+        r2 = regions[i + j]
+        if r2 not in r1_neighbors or r2 in ignore_regions:
             continue
 
         k += 1
@@ -582,9 +630,39 @@ for i, x in enumerate(distros):
 print('%s' % (k), file=sys.stderr, flush=True)
 print('done in %.2f sec' % (time.time() - start), file=sys.stderr, flush=True)
 
+# if args.stem:
+#     print('Writing stem indices...', file=sys.stderr, flush=True)
+#     stem_file = open('%s%s.inverted_stems.tsv' % (args.prefix, '.'.join(info)), 'w')
+#     for stem, words in inverted_stems.items():
+#         stem_file.write("%s\t%s\n" % (stem, ', '.join(words)))
+#     stem_file.close()
+#     print('done', file=sys.stderr, flush=True)
 
-if args.geo:
-    print('\nDistances in km:\n', D.to_latex(float_format=lambda x: '%.2f' % x), file=sys.stderr, flush=True)
+# 2 stats
+
+# start = time.time()
+# print('Computing region differences...', file=sys.stderr, flush=True)
+# g2_file = open('%s%s.G2-regions.tsv' % (args.prefix, '.'.join(info)), 'w')
+# for i, row in enumerate(all_distros):
+#     rest_indices = row_indices.copy()
+#     rest_indices.remove(i)
+#     m = all_distros[rest_indices].mean(axis=0)
+#     g2 = np.log(row / m)
+#     top_vocab = g2.argsort()[-50:]
+#
+#     if args.stem:
+#         g2_file.write("%s\n\n" % '\n'.join('%s\t%s\t%s' % (land_regions[i], w, g) for (w, g) in
+#                                            reversed(list(zip([min(inverted_stems[top_N[x]]) for x in top_vocab],
+#                                                              [g2[x] for x in top_vocab])))))
+#
+#     else:
+#         g2_file.write("%s\n\n" % '\n'.join('%s\t%s\t%s' % (land_regions[i], w, g) for (w, g) in
+#                                            reversed(
+#                                                list(zip([top_N[x] for x in top_vocab], [g2[x] for x in top_vocab])))))
+#
+# g2_file.close()
+# print('done in %.2f sec' % (time.time() - start), file=sys.stderr, flush=True)
+
 
 Y = L
 if args.geo:
@@ -592,6 +670,8 @@ if args.geo:
     print('\nmulitplied:\n', Y)
 
 # compute clusters over K
+all_distros = np.copy(distros)
+row_indices = list(range(distros.shape[0]))
 start = time.time()
 print('Computing clusters...', file=sys.stderr, flush=True)
 if args.clusters:
@@ -599,49 +679,44 @@ if args.clusters:
 
         clustering = AgglomerativeClustering(linkage=args.linkage, n_clusters=num_c, connectivity=adjacency)
         cluster_names = clustering.fit_predict(Y, adjacency)
-        # region2cluster = list(zip(regions, hierarchy.fcluster(row_linkage, num_c, criterion='maxclust')))
         region2cluster = list(zip(regions, cluster_names))
 
         cluster_file = open('%s%s.%sclusters.tsv' % (args.prefix, '.'.join(info), num_c), 'w')
         cluster_file.write('%s\n' % '\n'.join(('%s\t%s' % (r, clusters) for (r, clusters) in region2cluster)))
         cluster_file.close()
 
-        g2_file = open('%s%s.G2-clusters.%sclusters.tsv' % (args.prefix, '.'.join(info), num_c), 'w')
+        g2_file = open('%s%s.G2.%sclusters.tsv' % (args.prefix, '.'.join(info), num_c), 'w')
 
         for i in range(0, num_c):
             in_cluster = []
             rest_indices = []
             for r, c in region2cluster:
-                if r in set(land_regions):
-                    rid = land_region_name2int[r]
+                if r in land_regions and r not in ignore_regions:
                     if c == i:
-                        in_cluster.append(rid)
+                        in_cluster.append(region_name2int[r])
                     else:
-                        rest_indices.append(rid)
+                        rest_indices.append(region_name2int[r])
 
             mean_rest = all_distros[rest_indices].mean(axis=0)
             mean_in = all_distros[in_cluster].mean(axis=0)
 
             g2 = np.log(mean_in / mean_rest)
-            top_vocab = g2.argsort()[-50:]
-            g2_file.write('Cluster %s: %s\n' % (i, ', '.join([str(land_regions[x]) for x in in_cluster])))
+            # remove NaN, inf, and -inf
+            g2 = np.where(np.isnan(g2), 0, g2)
+            g2 = np.where(g2 == float('inf'), 0, g2)
+            g2 = np.where(g2 == float('-inf'), 0, g2)
+
+            # select the top 50, or all non-zero values
+            top_50 = g2.argsort()[-min(50, len(g2.nonzero()[0])):]
+            top_vocab = [reduced2orgID[x] for x in top_50]
+
+            g2_file.write('Cluster %s: %s\n' % (i, ', '.join([str(regions[x]) for x in in_cluster])))
             if args.stem:
                 g2_file.write("%s\n\n" % '\n'.join('\t%s\t%s' % (w, g) for (w, g) in reversed(
-                    list(zip([min(inverted_stems[top_N[x]]) for x in top_vocab], [g2[x] for x in top_vocab])))))
+                    list([(g2[i], min(inverted_stems[x])) for i, x in zip(top_50, top_vocab)]))))
             else:
                 g2_file.write("%s\n\n" % '\n'.join('\t%s\t%s' % (w, g) for (w, g) in reversed(
-                    list(zip([top_N[x] for x in top_vocab], [g2[x] for x in top_vocab])))))
-
-
-            # y = [1 if c == i else 0 for r, c in region2cluster]
-            #
-            # sel = RandomizedLogisticRegression(n_jobs=1, n_resampling=100, sample_fraction=0.75, verbose=2, selection_threshold=0.2)
-            # new_X = sel.fit_transform(all_distros, y)
-            #
-            # active_feature_mask = sel.get_support()
-            # selected_feature_names = np.asarray(top_N)[active_feature_mask]
-            # selected_feature_probs = sel.scores_[active_feature_mask]
-            # print("%s clusters, cluster %s:" % (num_c, i), selected_feature_names, selected_feature_probs)
+                    list(zip([x for x in top_vocab], [g2[x] for x in top_50])))))
 
         g2_file.close()
 print('done in %.2f sec' % (time.time() - start), file=sys.stderr, flush=True)

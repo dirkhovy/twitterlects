@@ -1,0 +1,47 @@
+2016-02-14.16-08-22.Lowlands.local emacs twitter_tokenizer.py
+2016-02-14.19-38-41.Lowlands.local ssh zen
+2016-02-14.20-24-11.Lowlands.local ipython
+2016-02-14.20-34-28.Lowlands.local python compare_regions_MAP.py ../data/toy.stemmed.langided.json.gz 
+2016-02-14.20-34-40.Lowlands.local python compare_regions_MAP.py --twitter ../data/toy.stemmed.langided.json.gz 
+2016-02-14.20-35-06.Lowlands.local python compare_regions_MAP.py --twitter ../data/toy.stemmed.langided.json.gz 
+2016-02-15.14-12-38.c252.hum-nfi.sc.ku.dk ipython
+2016-04-04.16-25-40.Lowlands.local ls ../data/
+2016-04-04.16-25-46.Lowlands.local cp bd
+2016-05-04.21-41-55.Lowlands.local python compare_regions_MAP.py --twitter ../data/toy.stemmed.langided.json.gz
+2016-05-04.21-46-44.Lowlands.local python compare_regions_MAP.py --twitter ../data/toy.stemmed.langided.json.gz
+2016-05-04.21-48-38.Lowlands.local python compare_regions_MAP.py --twitter ../data/toy.stemmed.langided.json.gz
+2016-05-04.21-49-49.Lowlands.local python compare_regions_MAP.py --twitter ../data/toy.stemmed.langided.json.gz
+2016-05-04.21-50-03.Lowlands.local python compare_regions_MAP.py --twitter ../data/toy.stemmed.langided.json.gz
+2016-05-04.21-50-15.Lowlands.local python compare_regions_MAP.py --twitter ../data/toy.stemmed.langided.json.gz
+2016-05-04.21-51-50.Lowlands.local python compare_regions_MAP.py --twitter ../data/toy.stemmed.langided.json.gz
+2016-05-04.22-05-49.Lowlands.local python compare_regions_MAP.py --twitter ../data/toy.stemmed.langided.json.gz
+2016-05-04.22-11-04.Lowlands.local python compute_adjacency.py
+2016-05-04.22-11-06.Lowlands.local ls
+2016-05-04.22-11-12.Lowlands.local python compare_regions_MAP.py --twitter ../data/toy.stemmed.langided.json.gz
+2016-05-04.22-19-34.Lowlands.local python compute_adjacency.py
+2016-05-04.22-19-42.Lowlands.local rm eu-0.1.regions.tsv 
+2016-05-04.22-21-21.Lowlands.local python compare_regions_MAP.py --twitter ../data/toy.stemmed.langided.json.gz
+2016-05-04.22-21-42.Lowlands.local python compare_regions_MAP.py --twitter ../data/toy.stemmed.langided.json.gz
+2016-05-04.22-23-43.Lowlands.local python compare_regions_MAP.py --twitter ../data/toy.stemmed.langided.json.gz
+2016-05-04.22-23-58.Lowlands.local python compare_regions_MAP.py --twitter ../data/toy.stemmed.langided.json.gz
+2016-05-04.22-29-04.Lowlands.local python compare_regions_MAP.py --twitter ../data/toy.stemmed.langided.json.gz
+2016-05-04.22-29-26.Lowlands.local python compare_regions_MAP.py --twitter ../data/toy.stemmed.langided.json.gz
+2016-05-04.22-29-53.Lowlands.local python compare_regions_MAP.py --twitter ../data/toy.stemmed.langided.json.gz
+2016-05-04.22-30-17.Lowlands.local python compare_regions_MAP.py --twitter ../data/toy.stemmed.langided.json.gz
+2016-05-05.00-45-16.Lowlands.local python compare_regions_MAP.py --twitter ../data/toy.stemmed.langided.json.gz
+2016-05-05.00-46-07.Lowlands.local ls output.eu.coords.5-neighbors.size-0.1.counts.mtx 
+2016-05-05.09-48-12.Lowlands.local python compare_regions_MAP.py --twitter ../data/toy.stemmed.langided.json.gz
+2016-05-05.19-51-18.Lowlands.local ipython
+2016-05-05.19-51-35.Lowlands.local python compare_regions_MAP.py --twitter ../data/toy.stemmed.langided.json.gz
+2016-05-05.19-52-58.Lowlands.local python compare_regions_MAP.py --twitter ../data/toy.stemmed.langided.json.gz
+2016-05-05.19-53-38.Lowlands.local python compare_regions_MAP.py --twitter ../data/toy.stemmed.langided.json.gz
+2016-05-05.19-53-56.Lowlands.local python compare_regions_MAP.py --twitter ../data/toy.stemmed.langided.json.gz --coord_size 0.2
+2016-05-05.19-54-27.Lowlands.local python compare_regions_MAP.py --twitter ../data/toy.stemmed.langided.json.gz --coord_size 0.2
+2016-05-05.23-21-21.Lowlands.local python compute_adjacency.py --coord_size 0.2
+2016-05-05.23-25-14.Lowlands.local python compute_adjacency.py --coord_size 0.2
+2016-05-06.14-00-37.c252.hum-nfi.sc.ku.dk python compute_adjacency.py --coord_size 0.2
+2016-05-06.14-02-44.c252.hum-nfi.sc.ku.dk python compute_adjacency.py --coord_size 0.2
+2016-05-06.14-03-54.c252.hum-nfi.sc.ku.dk python compute_adjacency.py --coord_size 0.2
+2016-05-06.14-04-15.c252.hum-nfi.sc.ku.dk python compute_adjacency.py --coord_size 0.2
+2016-05-06.14-14-21.c252.hum-nfi.sc.ku.dk python compute_adjacency.py --coord_size 0.2
+2016-05-06.14-18-33.c252.hum-nfi.sc.ku.dk python compute_adjacency.py --coord_size 0.2

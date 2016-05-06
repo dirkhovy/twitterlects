@@ -74,11 +74,7 @@ else:
 
 # run topic models
 print("fitting model", file=sys.stderr)
-<<<<<<< HEAD
-model = ldamodel.LdaModel(model_corpus, id2word=dictionary, num_topics=args.topics)
-=======
 model = ldamodel.LdaModel(model_corpus, id2word=dictionary, num_topics=args.topics, chunksize=int(len(texts)/1000), passes=1)
->>>>>>> 021225024c6411a0a51b2e8ceb31ae279ed9d61c
 # transform corpus
 print("transforming input", file=sys.stderr)
 topic_corpus = model[model_corpus]
