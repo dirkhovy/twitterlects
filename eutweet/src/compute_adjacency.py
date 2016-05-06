@@ -26,7 +26,7 @@ for lat in range(num_lats):
     for lng in range(num_lngs):
         regions.append((lat, lng))
 
-regions_file = '%s-%s.regions.json' % (args.country, args.coord_size)
+regions_file = '%s%s-%s.regions.json' % (args.prefix, args.country, args.coord_size)
 print('Saving regions to "%s"' % (regions_file), file=sys.stderr, flush=True)
 with open(regions_file, "w") as regions_json:
     json.dump(regions, regions_json)
@@ -73,12 +73,12 @@ for i in range(num_lats):
                 land_regions.add((n1, n2))
                 covered.add(tuple(sorted(((i, j), (n1, n2)))))
 
-land_regions_file = '%s-%s.land_regions.json' % (args.country, args.coord_size)
+land_regions_file = '%s%s-%s.land_regions.json' % (args.prefix, args.country, args.coord_size)
 print('Saving regions to "%s"' % (land_regions_file), file=sys.stderr, flush=True)
 with open(land_regions_file, "w") as land_regions_json:
     json.dump(land_regions, land_regions_json)
 print('done.', file=sys.stderr, flush=True)
 
 print('done in %.2f sec' % (time.time() - start), file=sys.stderr, flush=True)
-adjacency.to_csv('%s-%s.adjacency.csv' % (args.country, args.coord_size))
+adjacency.to_csv('%s%s-%s.adjacency.csv' % (args.prefix, args.country, args.coord_size))
 print('%s land regions (out of %s)' % (len(land_regions), len(regions)), file=sys.stderr, flush=True)

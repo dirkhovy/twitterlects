@@ -51,3 +51,8 @@
 2016-05-06.14-43-14.c252.hum-nfi.sc.ku.dk ls
 2016-05-06.14-43-20.c252.hum-nfi.sc.ku.dk git rm output.eu.coords.5-neighbors.size-0.1.*
 2016-05-06.14-43-36.c252.hum-nfi.sc.ku.dk git rm output.eu.coords.5-neighbors.size-0.1.*
+2016-05-06.14-43-47.c252.hum-nfi.sc.ku.dk git commit -am "cleanup src"
+2016-05-06.14-43-53.c252.hum-nfi.sc.ku.dk push
+2016-05-06.14-49-45.c252.hum-nfi.sc.ku.dk push
+2016-05-06.14-49-57.c252.hum-nfi.sc.ku.dk push
+2016-05-06.14-49-59.c252.hum-nfi.sc.ku.dk push
