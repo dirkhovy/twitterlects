@@ -102,6 +102,7 @@ parser.add_argument('--country', choices=['denmark', 'germany', 'france', 'uk'],
 parser.add_argument('--distance', choices=['kl', 'laskers', 'js'], help='similarity function on vocab', default='js')
 parser.add_argument('--geo', help='use geographic distance', action='store_true', default=False)
 parser.add_argument('--idf', help='weigh vocabulary terms by IDF', choices=['docs', 'regions'], default=None)
+parser.add_argument('--kernel', help='compute similarity kernel between regions', action='store_true', default=False)
 parser.add_argument('--limit', help='max instances', type=int, default=None)
 parser.add_argument('--linkage', help='linkage for clustering', choices=['complete', 'ward', 'average'],
                     default='ward')
