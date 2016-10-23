@@ -557,11 +557,11 @@ print("\nreduced to %s words" % (num_feats), file=sys.stderr, flush=True)
 
 
 # reset topN word count for all regions that have not enough support to 1
-ignore_regions = {target for target in regions if support[region_name2int[target]] < args.min_support}
+ignore_regions = {target for target in regions if support[coord2id[target]] < args.min_support}
 print('found %s unsupported regions (fewer than %s entries), leaving %s supported land regions...' % (len(ignore_regions), args.min_support, len(regions) - len(ignore_regions)),
       file=sys.stderr, flush=True)
 with open('%s%s.support.tsv' % (args.prefix, '.'.join(info)), 'w') as support_file:
-    support_file.write('\n'.join(["%s\t%s" % (target, support[region_name2int[target]]) for target in regions]))
+    support_file.write('\n'.join(["%s\t%s" % (target, support[coord2id[target]]) for target in regions]))
 
 
 # idf transformation before normalization
@@ -692,9 +692,9 @@ if args.clusters:
             for r, c in region2cluster:
                 if r in land_regions and r not in ignore_regions:
                     if c == i:
-                        in_cluster.append(region_name2int[r])
+                        in_cluster.append(coord2id[r])
                     else:
-                        rest_indices.append(region_name2int[r])
+                        rest_indices.append(coord2id[r])
 
             mean_rest = all_distros[rest_indices].mean(axis=0)
             mean_in = all_distros[in_cluster].mean(axis=0)
