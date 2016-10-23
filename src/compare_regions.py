@@ -592,7 +592,7 @@ print('Computing distribution...', file=sys.stderr, flush=True)
 distros = normalize(counts, norm='l1', axis=1)
 print('done in %.2f sec' % (time.time() - start), file=sys.stderr, flush=True)
 
-Y = distros
+Y = distros.todense()
 
 if args.kernel:
     # compute matrix L, distance between regions based on vocab distros
