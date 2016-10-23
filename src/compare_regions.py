@@ -249,7 +249,7 @@ elif args.target == 'coords':
 
     land_regions = land_ravel.nonzero()[0].tolist()
     print('done in %.2f sec' % (time.time() - start), file=sys.stderr, flush=True)
-    adjacency.to_csv('%s-%s.adjacency.csv' % (args.country, args.coord_size))
+    # adjacency.to_csv('%s-%s.adjacency.csv' % (args.country, args.coord_size))
     print('%s land regions (out of %s)' % (len(land_regions), len(regions)), file=sys.stderr, flush=True)
 
 else:
