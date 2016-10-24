@@ -221,6 +221,7 @@ elif args.target == 'coords':
     print("%s regions" % num_regions, file=sys.stderr, flush=True)
 
     print("computing land mask...", file=sys.stderr, flush=True)
+    start = time.time()
     m = Basemap(llcrnrlat=country_boxes[args.country][0],
                 urcrnrlat=country_boxes[args.country][1],
                 llcrnrlon=country_boxes[args.country][2],
@@ -233,6 +234,7 @@ elif args.target == 'coords':
     land = np.reshape(np.array([m.is_land(country_lngs_m[n1, n2], country_lats_m[n1, n2]) for (n1, n2) in regions]),
                       (num_lats, num_lngs))
     land_ravel = land.ravel()
+    print('done in %.2f sec' % (time.time() - start), file=sys.stderr, flush=True)
 
     # get maps between the two views
     coord2id = dict(zip([(i, j) for i in range(num_lats) for j in range(num_lngs)], range(num_regions)))
@@ -245,7 +247,7 @@ elif args.target == 'coords':
     for i in range(num_lats):
         for j in range(num_lngs):
             coord = coord2id[(i, j)]
-            for knn in [coord2id[kn] for kn in neighbors(i, j, land, 10)]:
+            for knn in [coord2id[kn] for kn in neighbors(i, j, land, args.num_neighbors)]:
                 adjacency[coord, knn] = 1
 
     land_regions = set(land_ravel.nonzero()[0].tolist())
@@ -259,25 +261,6 @@ else:
 # land_region_name2int = dict([(name, i) for (i, name) in enumerate(land_regions)])
 review_frequency = Counter()
 
-# compute matrix D, distances between regions
-if args.geo:
-    D = pd.DataFrame(0.0, index=regions, columns=regions)  # np.zeros((len(regions), len(regions)), dtype=float)
-
-    if args.target == 'region':
-        for i, r1 in enumerate(regions):
-            for j, r2 in enumerate(regions[i + 1:]):
-                x = get_shortest_in(region_centers[r1], np.array(region_centers[r2]))[0]
-                # x = np.log(get_shortest_in(region_centers[r1], np.array(region_centers[r2]))[0])
-                D.ix[r1, r2] = x
-                D.ix[r2, r1] = x
-    elif args.target == 'coords':
-        for i in enumerate(regions):
-            lat_lng1 = (country_lats[regions[i][0]], country_lngs[regions[i][1]])
-            for j in enumerate(regions[i + 1:]):
-                lat_lng2 = (country_lats[regions[j][0]], country_lngs[regions[j][1]])
-                x = get_shortest_in(lat_lng1, lat_lng2)[0]
-                D.ix[lat_lng1, lat_lng2] = x
-                D.ix[lat_lng2, lat_lng1] = x
 
 # collect total vocab
 support = defaultdict(int)
@@ -334,6 +317,7 @@ if args.trustpilot:
 
                         # use your words...
                         else:
+                            # split on sentences and words, put it all together with spaces, then split each token into one long list
                             org_words = (' '.join([' '.join(word_tokenizer.tokenize(x)) for x in
                                                    sentence_tokenizer.tokenize(text)])).split()
                             org_words = [word for word in org_words if word.lower() not in stops and len(word) > 1]
@@ -571,21 +555,6 @@ active_regions = list(sorted(land_regions.difference(ignore_regions)))
 with open('%s%s.support.tsv' % (args.prefix, '.'.join(info)), 'w') as support_file:
     support_file.write('\n'.join(["%s\t%s" % (target, support[coord2id[target]]) for target in regions]))
 
-# idf transformation before normalization
-if args.idf:
-    start = time.time()
-    print('Computing IDF values...', file=sys.stderr, flush=True)
-    if args.idf == 'docs':
-        idf = np.log(counts.sum() / (counts.sum(axis=0)))
-    # normalize by the number of regions it occurred in
-    else:
-        idf = np.log(counts.sum() / (np.bincount(counts.nonzero()[1])))
-
-    counts = counts.multiply(idf)
-    print('done in %.2f sec' % (time.time() - start), file=sys.stderr, flush=True)
-else:
-    counts = counts.todense()
-
 # permute count matrix to check whether outcome is still sensible
 if args.random:
     counts = np.random.random((counts.shape))
@@ -598,11 +567,8 @@ if args.random:
 start = time.time()
 print('Computing distribution...', file=sys.stderr, flush=True)
 distros = normalize(counts, norm='l1', axis=1)
+all_distros = distros.copy().todense()
 print('done in %.2f sec' % (time.time() - start), file=sys.stderr, flush=True)
-
-
-all_distros = np.copy(distros)
-
 
 if args.kernel:
     # compute matrix L, distance between regions based on vocab distros
@@ -641,6 +607,57 @@ if args.kernel:
     print('done in %.2f sec' % (time.time() - start), file=sys.stderr, flush=True)
     adjacency *= L
 
+# compute matrix D, distances between regions
+if args.geo:
+    # D = pd.DataFrame(0.0, index=regions, columns=regions)
+    D = np.zeros((len(regions), len(regions)), dtype=float)
+
+    if args.target == 'region':
+        for i, r1 in enumerate(regions):
+            for j, r2 in enumerate(regions[i + 1:]):
+                x = get_shortest_in(region_centers[r1], np.array(region_centers[r2]))[0]
+                # x = np.log(get_shortest_in(region_centers[r1], np.array(region_centers[r2]))[0])
+                D.ix[r1, r2] = x
+                D.ix[r2, r1] = x
+    elif args.target == 'coords':
+        for i in active_regions:
+            lat1, lng1 = id2coord[i]
+            lat_lng1 = (country_lats[lat1], country_lngs[lng1])
+
+            r1_neighbors = adjacency[i].nonzero()[0]
+            for j in r1_neighbors:
+                if j not in active_regions:
+                    continue
+                lat2, lng2 = id2coord[j]
+                lat_lng2 = (country_lats[lat2], country_lngs[lng2])
+                x = get_shortest_in(lat_lng1, lat_lng2)[0]
+                D[i, j] = x
+                D[j, i] = x
+
+        # normalize distances by greatest
+        D = D/D.max()
+
+        # invert distances
+        D = np.where(D > 0.0, 1.0-D, 0)
+
+        adjacency *= D
+
+# idf transformation
+if args.idf:
+    start = time.time()
+    print('Computing IDF values...', file=sys.stderr, flush=True)
+    if args.idf == 'docs':
+        idf = np.log(distros.sum() / (distros.sum(axis=0)))
+    # normalize by the number of regions it occurred in
+    else:
+        idf = np.log(distros.sum() / (np.bincount(distros.nonzero()[1])))
+
+    distros = distros.multiply(idf)
+
+    print('done in %.2f sec' % (time.time() - start), file=sys.stderr, flush=True)
+else:
+    distros = distros.todense()
+
 # if args.stem:
 #     print('Writing stem indices...', file=sys.stderr, flush=True)
 #     stem_file = open('%s%s.inverted_stems.tsv' % (args.prefix, '.'.join(info)), 'w')
@@ -651,34 +668,11 @@ if args.kernel:
 
 # 2 stats
 
-# start = time.time()
-# print('Computing region differences...', file=sys.stderr, flush=True)
-# g2_file = open('%s%s.G2-regions.tsv' % (args.prefix, '.'.join(info)), 'w')
-# for i, row in enumerate(all_distros):
-#     rest_indices = row_indices.copy()
-#     rest_indices.remove(i)
-#     m = all_distros[rest_indices].mean(axis=0)
-#     g2 = np.log(row / m)
-#     top_vocab = g2.argsort()[-50:]
-#
-#     if args.stem:
-#         g2_file.write("%s\n\n" % '\n'.join('%s\t%s\t%s' % (land_regions[i], w, g) for (w, g) in
-#                                            reversed(list(zip([min(inverted_stems[top_N[x]]) for x in top_vocab],
-#                                                              [g2[x] for x in top_vocab])))))
-#
-#     else:
-#         g2_file.write("%s\n\n" % '\n'.join('%s\t%s\t%s' % (land_regions[i], w, g) for (w, g) in
-#                                            reversed(
-#                                                list(zip([top_N[x] for x in top_vocab], [g2[x] for x in top_vocab])))))
-#
-# g2_file.close()
-# print('done in %.2f sec' % (time.time() - start), file=sys.stderr, flush=True)
-
-# reduce distro to active regions
+# reduce distro and adjacency to active regions
 distros = distros[active_regions,:]
 adjacency = adjacency[active_regions, :][:, active_regions]
 
-print(distros.shape, adjacency.shape, file=sys.stderr, flush=True)
+print(adjacency, adjacency.shape)
 
 # compute clusters over K
 row_indices = active_regions
@@ -688,7 +682,7 @@ if args.clusters:
     for num_c in map(int, args.clusters.split(',')):
 
         clustering = AgglomerativeClustering(linkage=args.linkage, n_clusters=num_c, connectivity=adjacency)
-        cluster_names = clustering.fit_predict(distros, adjacency)
+        cluster_names = clustering.fit_predict(distros)
         region2cluster = dict(zip(active_regions, cluster_names))
 
         cluster_file = open('%s%s.%sclusters.tsv' % (args.prefix, '.'.join(info), num_c), 'w')
@@ -722,16 +716,16 @@ if args.clusters:
             g2 = np.where(g2 == float('-inf'), 0, g2)
 
             # select the top 50, or all non-zero values
-            top_50 = g2.argsort()[-min(50, len(g2.nonzero()[0])):]
-            top_vocab = [reduced2orgID[x] for x in top_50]
-
-            g2_file.write('Cluster %s: %s\n' % (i, ', '.join([str(regions[x]) for x in in_cluster])))
-            if args.stem:
-                g2_file.write("%s\n\n" % '\n'.join('\t%s\t%s' % (w, g) for (w, g) in reversed(
-                    list([(g2[i], min(inverted_stems[x])) for i, x in zip(top_50, top_vocab)]))))
-            else:
-                g2_file.write("%s\n\n" % '\n'.join('\t%s\t%s' % (w, g) for (w, g) in reversed(
-                    list(zip([x for x in top_vocab], [g2[x] for x in top_50])))))
+            # top_50 = g2.argsort()[-min(50, len(g2.nonzero()[0])):].tolist()
+            # top_vocab = [reduced2orgID[x] for x in top_50]
+            #
+            # g2_file.write('Cluster %s: %s\n' % (i, ', '.join([str(regions[x]) for x in in_cluster])))
+            # if args.stem:
+            #     g2_file.write("%s\n\n" % '\n'.join('\t%s\t%s' % (w, g) for (w, g) in reversed(
+            #         list([(g2[i], min(inverted_stems[x])) for i, x in zip(top_50, top_vocab)]))))
+            # else:
+            #     g2_file.write("%s\n\n" % '\n'.join('\t%s\t%s' % (w, g) for (w, g) in reversed(
+            #         list(zip([x for x in top_vocab], [g2[x] for x in top_50])))))
 
         g2_file.close()
 print('done in %.2f sec' % (time.time() - start), file=sys.stderr, flush=True)
