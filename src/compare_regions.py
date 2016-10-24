@@ -220,17 +220,16 @@ elif args.target == 'coords':
     num_regions = len(regions)
     print("%s regions" % num_regions, file=sys.stderr, flush=True)
 
+    print("computing land mask...", file=sys.stderr, flush=True)
     m = Basemap(llcrnrlat=country_boxes[args.country][0],
                 urcrnrlat=country_boxes[args.country][1],
                 llcrnrlon=country_boxes[args.country][2],
                 urcrnrlon=country_boxes[args.country][3],
-                resolution='l', projection='merc')
+                resolution='i', projection='merc')
 
     lon_bins_2d, lat_bins_2d = np.meshgrid(country_lngs, country_lats)
-
     country_lngs_m, country_lats_m = m(lon_bins_2d, lat_bins_2d)
 
-    print("computing land mask...", file=sys.stderr, flush=True)
     land = np.reshape(np.array([m.is_land(country_lngs_m[n1, n2], country_lats_m[n1, n2]) for (n1, n2) in regions]),
                       (num_lats, num_lngs))
     land_ravel = land.ravel()
@@ -584,6 +583,8 @@ if args.idf:
 
     counts = counts.multiply(idf)
     print('done in %.2f sec' % (time.time() - start), file=sys.stderr, flush=True)
+else:
+    counts = counts.todense()
 
 # permute count matrix to check whether outcome is still sensible
 if args.random:
@@ -599,25 +600,27 @@ print('Computing distribution...', file=sys.stderr, flush=True)
 distros = normalize(counts, norm='l1', axis=1)
 print('done in %.2f sec' % (time.time() - start), file=sys.stderr, flush=True)
 
-Y = distros
+
+all_distros = np.copy(distros)
+
 
 if args.kernel:
     # compute matrix L, distance between regions based on vocab distros
     start = time.time()
     print('Computing linguistic distances:', file=sys.stderr, flush=True)
     distance_function = distances[args.distance]
-    L = np.zeros((len(active_regions), len(active_regions)))
+    L = np.zeros((len(regions), len(regions)))
     k = 0
     for i in active_regions:
 
-        r1 = distros[i]
-        r1_neighbors = adjacency[r1].nonzero()[0]
+        r1 = all_distros[i]
+        r1_neighbors = adjacency[i].nonzero()[0]
 
         for j in r1_neighbors:
             if j not in active_regions:
                 continue
 
-            r2 = distros[j]
+            r2 = all_distros[j]
 
             k += 1
             if k > 0:
@@ -627,12 +630,12 @@ if args.kernel:
                     print('.', file=sys.stderr, flush=True, end='')
 
             if args.distance == 'js':
-                distance = js(x, y)
-                L[r1, r2] = distance
-                L[r2, r1] = distance
+                distance = js(r1, r2)
+                L[i, j] = distance
+                L[j, i] = distance
             else:
-                L[r1, r2] = distance_function(x, y)
-                L[r2, r1] = distance_function(y, x)
+                L[i, j] = distance_function(r1, r2)
+                L[j, i] = distance_function(r2, r1)
 
     print('%s' % (k), file=sys.stderr, flush=True)
     print('done in %.2f sec' % (time.time() - start), file=sys.stderr, flush=True)
@@ -671,7 +674,6 @@ if args.kernel:
 # g2_file.close()
 # print('done in %.2f sec' % (time.time() - start), file=sys.stderr, flush=True)
 
-all_distros = np.copy(distros)
 # reduce distro to active regions
 distros = distros[active_regions,:]
 adjacency = adjacency[active_regions, :][:, active_regions]
@@ -693,6 +695,7 @@ if args.clusters:
         for rid in range(len(regions)):
             if rid in set(active_regions):
                 cluster = region2cluster[rid] + 1
+            # all non-active regions are cluster 0
             else:
                 cluster = 0
             cluster_file.write('%s\t%s\n' % (id2coord[rid], cluster))
@@ -703,11 +706,11 @@ if args.clusters:
         for i in range(0, num_c):
             in_cluster = []
             rest_indices = []
-            for r, c in region2cluster:
+            for r, c in region2cluster.items():
                 if c == i:
-                    in_cluster.append(coord2id[r])
+                    in_cluster.append(r)
                 else:
-                    rest_indices.append(coord2id[r])
+                    rest_indices.append(r)
 
             mean_rest = all_distros[rest_indices].mean(axis=0)
             mean_in = all_distros[in_cluster].mean(axis=0)
