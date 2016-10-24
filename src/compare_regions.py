@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 import nltk.data
 import numpy as np
 import pandas as pd
-import seaborn as sns
+# import seaborn as sns
 import time
 from mpl_toolkits.basemap import Basemap
 from nltk.stem import SnowballStemmer
@@ -25,8 +25,8 @@ from itertools import count
 from scipy import sparse
 from sklearn.preprocessing import normalize
 
-sns.set(font="monospace")
-sns.set_context('poster')
+# sns.set(font="monospace")
+# sns.set_context('poster')
 
 EARTH_RADIUS = 6371
 numbers = re.compile(r"[0123456789]")
@@ -78,16 +78,16 @@ def get_shortest_in(needle, haystack):
 
 def neighbors(x, y, M, n):
     X, Y = M.shape
-    return [(x2, y2) for x2 in range(x-n, x+n+1)
-                               for y2 in range(y-n, y+n+1)
-                               if ((0 <= x < X) and
-                                   (0 <= y < Y) and
-                                   (x != x2 or y != y2) and
-                                   (0 <= x2 < X) and
-                                   (0 <= y2 < Y) and
-                                   M[x,y] != 0 and
-                                   M[x2,y2] != 0
-                                  )]
+    return [(x2, y2) for x2 in range(x - n, x + n + 1)
+            for y2 in range(y - n, y + n + 1)
+            if ((0 <= x < X) and
+                (0 <= y < Y) and
+                (x != x2 or y != y2) and
+                (0 <= x2 < X) and
+                (0 <= y2 < Y) and
+                M[x, y] != 0 and
+                M[x2, y2] != 0
+                )]
 
 
 parser = argparse.ArgumentParser(description="compare regions")
@@ -206,7 +206,7 @@ if args.target == 'region':
             adjacency.iloc[j, i] = shapes[j].intersects(nuts_shape)
             # TODO: what about the inverse?
 
-    land_regions = list(regions)
+    land_regions = set(regions)
 
 # geo-coordinates are 0.1 increments of lat-lng pairs, based on the country's bounding box
 elif args.target == 'coords':
@@ -231,12 +231,13 @@ elif args.target == 'coords':
     country_lngs_m, country_lats_m = m(lon_bins_2d, lat_bins_2d)
 
     print("computing land mask...", file=sys.stderr, flush=True)
-    land = np.reshape(np.array([m.is_land(country_lngs_m[n1, n2], country_lats_m[n1, n2]) for (n1, n2) in regions]), (num_lats, num_lngs))
+    land = np.reshape(np.array([m.is_land(country_lngs_m[n1, n2], country_lats_m[n1, n2]) for (n1, n2) in regions]),
+                      (num_lats, num_lngs))
     land_ravel = land.ravel()
 
     # get maps between the two views
-    coord2id = dict(zip([(i,j) for i in range(num_lats) for j in range(num_lngs)], range(num_regions)))
-    id2coord = {v:k for k,v in coord2id.items()}
+    coord2id = dict(zip([(i, j) for i in range(num_lats) for j in range(num_lngs)], range(num_regions)))
+    id2coord = {v: k for k, v in coord2id.items()}
 
     print("computing adjacency...", file=sys.stderr, flush=True)
     start = time.time()
@@ -244,11 +245,11 @@ elif args.target == 'coords':
     adjacency = np.zeros((num_regions, num_regions))
     for i in range(num_lats):
         for j in range(num_lngs):
-            coord = coord2id[(i,j)]
-            for knn in [coord2id[kn] for kn in neighbors(i,j,land, 10)]:
+            coord = coord2id[(i, j)]
+            for knn in [coord2id[kn] for kn in neighbors(i, j, land, 10)]:
                 adjacency[coord, knn] = 1
 
-    land_regions = land_ravel.nonzero()[0].tolist()
+    land_regions = set(land_ravel.nonzero()[0].tolist())
     print('done in %.2f sec' % (time.time() - start), file=sys.stderr, flush=True)
     # adjacency.to_csv('%s-%s.adjacency.csv' % (args.country, args.coord_size))
     print('%s land regions (out of %s)' % (len(land_regions), len(regions)), file=sys.stderr, flush=True)
@@ -327,7 +328,7 @@ if args.trustpilot:
                             text = "S" + text.lower() + "E"
 
                             for n in range(2, 7):
-                                for chargram in [word2int[text[i:i+n]] for i in range(len(text)-n+1)]:
+                                for chargram in [word2int[text[i:i + n]] for i in range(len(text) - n + 1)]:
                                     rows.append(target)
                                     cols.append(chargram)
                                     values.append(1)
@@ -450,7 +451,7 @@ if args.twitter:
                 # TypeError: 'int' object is not iterable in <listcomp>
                 try:
                     user_regions = [coord2id[(bisect.bisect(country_lats, float('%.3f' % user_lat)),
-                                                     bisect.bisect(country_lngs, float('%.3f' % user_lng)))] for
+                                              bisect.bisect(country_lngs, float('%.3f' % user_lng)))] for
                                     (user_lat, user_lng) in
                                     user_regions]
                 except TypeError:
@@ -470,7 +471,7 @@ if args.twitter:
                 if args.chars:
                     text = "S" + text.lower() + "E"
                     for n in range(2, 7):
-                        for chargram in [word2int[text[i:i+n]] for i in range(len(text)-n+1)]:
+                        for chargram in [word2int[text[i:i + n]] for i in range(len(text) - n + 1)]:
                             rows.append(target)
                             cols.append(chargram)
                             values.append(1)
@@ -504,7 +505,8 @@ if args.twitter:
                     review_frequency.update(set(wids))
 
                     if args.bigrams:
-                        bigrams = [' '.join(bigram) for bigram in nltk.bigrams(words) if ' '.join(bigram).strip() is not '']
+                        bigrams = [' '.join(bigram) for bigram in nltk.bigrams(words) if
+                                   ' '.join(bigram).strip() is not '']
                         if args.stem:
                             for bigram in bigrams:
                                 inverted_stems[bigram].add(bigram)
@@ -556,14 +558,19 @@ reduced2orgID = {i: int2word[value] for i, value in enumerate(top_N)}
 num_inst, num_feats = counts.shape
 print("\nreduced to %s words" % (num_feats), file=sys.stderr, flush=True)
 
-
 # reset topN word count for all regions that have not enough support to 1
-ignore_regions = {target for target in regions if support[coord2id[target]] < args.min_support}
-print('found %s unsupported regions (fewer than %s entries), leaving %s supported land regions...' % (len(ignore_regions), args.min_support, len(regions) - len(ignore_regions)),
+ignore_regions = {coord2id[target] for target in regions if support[coord2id[target]] < args.min_support}
+print('found %s unsupported regions (fewer than %s entries), leaving %s supported land regions...' % (
+    len(ignore_regions), args.min_support, len(land_regions.difference(ignore_regions))),
       file=sys.stderr, flush=True)
+
+active_regions = list(sorted(land_regions.difference(ignore_regions)))
+
+# # reset unsupported regions to uniform distro
+# counts[list(ignore_regions)] = 1
+
 with open('%s%s.support.tsv' % (args.prefix, '.'.join(info)), 'w') as support_file:
     support_file.write('\n'.join(["%s\t%s" % (target, support[coord2id[target]]) for target in regions]))
-
 
 # idf transformation before normalization
 if args.idf:
@@ -592,29 +599,25 @@ print('Computing distribution...', file=sys.stderr, flush=True)
 distros = normalize(counts, norm='l1', axis=1)
 print('done in %.2f sec' % (time.time() - start), file=sys.stderr, flush=True)
 
-Y = distros.todense()
+Y = distros
 
 if args.kernel:
     # compute matrix L, distance between regions based on vocab distros
     start = time.time()
     print('Computing linguistic distances:', file=sys.stderr, flush=True)
     distance_function = distances[args.distance]
-    L = pd.DataFrame(0.0, index=regions, columns=regions)
+    L = np.zeros((len(active_regions), len(active_regions)))
     k = 0
-    # max_computations = int(len(regions) * ((args.num_neighbors*2+1)**2)
-    for i, x in enumerate(distros):
+    for i in active_regions:
 
-        r1 = regions[i]
-        if r1 in ignore_regions or r1 not in land_regions:
-            continue
+        r1 = distros[i]
+        r1_neighbors = adjacency[r1].nonzero()[0]
 
-        r1_neighbors = set(adjacency[r1][adjacency[r1] == True].index.tolist())
-
-        for j, y in enumerate(distros[i:]):
-
-            r2 = regions[i + j]
-            if r2 not in r1_neighbors or r2 in ignore_regions:
+        for j in r1_neighbors:
+            if j not in active_regions:
                 continue
+
+            r2 = distros[j]
 
             k += 1
             if k > 0:
@@ -625,15 +628,15 @@ if args.kernel:
 
             if args.distance == 'js':
                 distance = js(x, y)
-                L.ix[r1, r2] = distance
-                L.ix[r2, r1] = distance
+                L[r1, r2] = distance
+                L[r2, r1] = distance
             else:
-                L.ix[r1, r2] = distance_function(x, y)
-                L.ix[r2, r1] = distance_function(y, x)
+                L[r1, r2] = distance_function(x, y)
+                L[r2, r1] = distance_function(y, x)
+
     print('%s' % (k), file=sys.stderr, flush=True)
     print('done in %.2f sec' % (time.time() - start), file=sys.stderr, flush=True)
-    Y = L
-
+    adjacency *= L
 
 # if args.stem:
 #     print('Writing stem indices...', file=sys.stderr, flush=True)
@@ -668,21 +671,31 @@ if args.kernel:
 # g2_file.close()
 # print('done in %.2f sec' % (time.time() - start), file=sys.stderr, flush=True)
 
+all_distros = np.copy(distros)
+# reduce distro to active regions
+distros = distros[active_regions,:]
+adjacency = adjacency[active_regions, :][:, active_regions]
+
+print(distros.shape, adjacency.shape, file=sys.stderr, flush=True)
 
 # compute clusters over K
-all_distros = np.copy(distros)
-row_indices = list(range(distros.shape[0]))
+row_indices = active_regions
 start = time.time()
 print('Computing clusters...', file=sys.stderr, flush=True)
 if args.clusters:
     for num_c in map(int, args.clusters.split(',')):
 
         clustering = AgglomerativeClustering(linkage=args.linkage, n_clusters=num_c, connectivity=adjacency)
-        cluster_names = clustering.fit_predict(Y, adjacency)
-        region2cluster = list(zip(regions, cluster_names))
+        cluster_names = clustering.fit_predict(distros, adjacency)
+        region2cluster = dict(zip(active_regions, cluster_names))
 
         cluster_file = open('%s%s.%sclusters.tsv' % (args.prefix, '.'.join(info), num_c), 'w')
-        cluster_file.write('%s\n' % '\n'.join(('%s\t%s' % (r, clusters) for (r, clusters) in region2cluster)))
+        for rid in range(len(regions)):
+            if rid in set(active_regions):
+                cluster = region2cluster[rid] + 1
+            else:
+                cluster = 0
+            cluster_file.write('%s\t%s\n' % (id2coord[rid], cluster))
         cluster_file.close()
 
         g2_file = open('%s%s.G2.%sclusters.tsv' % (args.prefix, '.'.join(info), num_c), 'w')
@@ -691,11 +704,10 @@ if args.clusters:
             in_cluster = []
             rest_indices = []
             for r, c in region2cluster:
-                if r in land_regions and r not in ignore_regions:
-                    if c == i:
-                        in_cluster.append(coord2id[r])
-                    else:
-                        rest_indices.append(coord2id[r])
+                if c == i:
+                    in_cluster.append(coord2id[r])
+                else:
+                    rest_indices.append(coord2id[r])
 
             mean_rest = all_distros[rest_indices].mean(axis=0)
             mean_in = all_distros[in_cluster].mean(axis=0)
