@@ -106,6 +106,7 @@ parser.add_argument('--kernel', help='compute similarity kernel between regions'
 parser.add_argument('--limit', help='max instances', type=int, default=None)
 parser.add_argument('--linkage', help='linkage for clustering', choices=['complete', 'ward', 'average'],
                     default='ward')
+parser.add_argument('--lower', help='lowercase words', action='store_true', default=False)
 parser.add_argument('--min_support', help='minimum documents for a region to be counted', type=int, default=10)
 parser.add_argument('--nounfilter',
                     help='filter out words that are uppercase at least N% of cases in non-initial contexts (1.0=include all, 0.0=allow no uppercase whatsoever)',
@@ -331,7 +332,10 @@ if args.trustpilot:
 
                                 words = list(filter(lambda word: word != '', stemmed_words))
                             else:
-                                words = org_words
+                                if args.lower:
+                                    words = words_lower
+                                else:
+                                    words = org_words
 
                             wids = [word2int[word] for word in words]
                             for w, wid in enumerate(wids):
@@ -475,7 +479,10 @@ if args.twitter:
 
                         words = list(filter(lambda word: word != '', stemmed_words))
                     else:
-                        words = org_words
+                        if args.lower:
+                            words = words_lower
+                        else:
+                            words = org_words
 
                     wids = [word2int[word] for word in words]
                     for w, wid in enumerate(wids):
@@ -567,7 +574,10 @@ if args.random:
 start = time.time()
 print('Computing distribution...', file=sys.stderr, flush=True)
 distros = normalize(counts, norm='l1', axis=1)
-all_distros = distros.copy().todense()
+try:
+    all_distros = distros.copy().todense()
+except AttributeError:
+    all_distros = distros.copy()
 print('done in %.2f sec' % (time.time() - start), file=sys.stderr, flush=True)
 
 if args.kernel:
@@ -656,7 +666,10 @@ if args.idf:
 
     print('done in %.2f sec' % (time.time() - start), file=sys.stderr, flush=True)
 else:
-    distros = distros.todense()
+    try:
+        distros = distros.todense()
+    except AttributeError:
+        pass
 
 # if args.stem:
 #     print('Writing stem indices...', file=sys.stderr, flush=True)
@@ -672,7 +685,7 @@ else:
 distros = distros[active_regions,:]
 adjacency = adjacency[active_regions, :][:, active_regions]
 
-print(adjacency, adjacency.shape)
+# print(adjacency, adjacency.shape)
 
 # compute clusters over K
 row_indices = active_regions
